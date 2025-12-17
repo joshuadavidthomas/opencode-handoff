@@ -18,6 +18,10 @@ and this project attempts to adhere to [Semantic Versioning](https://semver.org/
 
 ## [Unreleased]
 
+### Added
+
+- Automatic file injection: @file references in handoff prompts are now automatically loaded into the new session's context
+
 ## [0.2.0]
 
 ### Added
