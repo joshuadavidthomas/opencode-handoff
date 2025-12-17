@@ -3,7 +3,7 @@ import { tool } from "@opencode-ai/plugin"
 
 function formatTranscript(messages: Array<{ info: any; parts: any[] }>, limit?: number): string {
   const lines: string[] = []
-  
+
   for (const msg of messages) {
     if (msg.info.role === "user") {
       lines.push("## User")
@@ -17,9 +17,9 @@ function formatTranscript(messages: Array<{ info: any; parts: any[] }>, limit?: 
       }
       lines.push("")
     }
-    
+
     if (msg.info.role === "assistant") {
-      lines.push("## Assistant")  
+      lines.push("## Assistant")
       for (const part of msg.parts) {
         if (part.type === "text") {
           lines.push(part.text)
@@ -31,13 +31,13 @@ function formatTranscript(messages: Array<{ info: any; parts: any[] }>, limit?: 
       lines.push("")
     }
   }
-  
+
   const output = lines.join("\n").trim()
-  
+
   if (messages.length >= (limit ?? 100)) {
     return output + `\n\n(Showing ${messages.length} most recent messages. Use a higher 'limit' to see more.)`
   }
-  
+
   return output + `\n\n(End of session - ${messages.length} messages)`
 }
 
@@ -59,7 +59,7 @@ Analyze this conversation and extract what matters for continuing the work.
 ## OUTPUT FORMAT
 
 1. FILE REFERENCES
-   
+
    Include all relevant @file references on a SINGLE LINE, space-separated.
 
    Why: Every @file gets loaded into context automatically. The next session won't need to search—the files are already there. This eliminates exploration entirely.
@@ -95,7 +95,13 @@ After generating the handoff message, IMMEDIATELY call handoff_prepare with the 
         const sessionReference = `Continuing work from session ${sourceSessionID}. When you lack specific information you can use read_session to get it.`
         const fullPrompt = `${sessionReference}\n\n${args.prompt}`
 
+        // Double-append workaround for textarea resize bug:
+        // appendPrompt uses insertText() which bypasses onContentChange, so resize never triggers.
+        // First append sets height in old session, session_new preserves textarea element,
+        // second append populates new session with already-expanded textarea.
         await ctx.client.tui.clearPrompt()
+        await new Promise(r => setTimeout(r, 200))
+        await ctx.client.tui.appendPrompt({ body: { text: fullPrompt } })
         await ctx.client.tui.executeCommand({ body: { command: "session_new" } })
         await new Promise(r => setTimeout(r, 200))
         await ctx.client.tui.appendPrompt({ body: { text: fullPrompt } })
@@ -121,17 +127,17 @@ After generating the handoff message, IMMEDIATELY call handoff_prepare with the 
       },
       async execute(args, context) {
         const limit = Math.min(args.limit ?? 100, 500)
-        
+
         try {
           const response = await ctx.client.session.messages({
             path: { id: args.sessionID },
             query: { limit }
           })
-          
+
           if (!response.data || response.data.length === 0) {
             return "Session has no messages or does not exist."
           }
-          
+
           const formatted = formatTranscript(response.data, limit)
           return formatted
         } catch (error) {
