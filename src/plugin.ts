@@ -2,40 +2,42 @@ import type { Plugin } from "@opencode-ai/plugin"
 import { HandoffSession, ReadSession } from "./tools"
 import { parseFileReferences, buildFileParts } from "./files"
 
-const HANDOFF_COMMAND = `You are creating a handoff message to continue work in a new session.
+const HANDOFF_COMMAND = `GOAL: You are creating a handoff message to continue work in a new session.
 
-User's goal: $ARGUMENTS
-
+<context>
 When an AI assistant starts a fresh session, it spends significant time exploring the codebase—grepping, reading files, searching—before it can begin actual work. This "file archaeology" is wasteful when the previous session already discovered what matters.
 
 A good handoff frontloads everything the next session needs so it can start implementing immediately.
+</context>
 
+<instructions>
 Analyze this conversation and extract what matters for continuing the work.
 
-## OUTPUT FORMAT
-
-1. FILE REFERENCES
-
-   Include all relevant @file references on a SINGLE LINE, space-separated.
-
-   Why: Every @file gets loaded into context automatically. The next session won't need to search—the files are already there. This eliminates exploration entirely.
+1. Identify all relevant files that should be loaded into the next session's context
 
    Include files that will be edited, dependencies being touched, relevant tests, configs, and key reference docs. Be generous—the cost of an extra file is low; missing a critical one means another archaeology dig. Target 8-15 files, up to 20 for complex work.
 
-2. CONTEXT AND GOAL
+2. Draft the context and goal description
 
-   After the files, describe what we're working on and provide whatever context helps continue the work. Structure it based on what fits the conversation—could be tasks, findings, a simple paragraph, or detailed steps.
+   Describe what we're working on and provide whatever context helps continue the work. Structure it based on what fits the conversation—could be tasks, findings, a simple paragraph, or detailed steps.
 
    Preserve: decisions, constraints, user preferences, technical patterns.
 
    Exclude: conversation back-and-forth, dead ends, meta-commentary.
 
 The user controls what context matters. If they mentioned something to preserve, include it—trust their judgment about their workflow.
+</instructions>
+
+<user_input>
+The user's guidance for continuing work. If empty, the handoff should capture a natural continuation of the current conversation's direction.
+
+USER: $ARGUMENTS
+</user_input>
 
 ---
 
-After generating the handoff message, IMMEDIATELY call handoff_session with the full message as a handoff prompt:
-\`handoff_session(prompt="...")\``
+After generating the handoff message, IMMEDIATELY call handoff_session with your prompt and files:
+\`handoff_session(prompt="...", files=["src/foo.ts", "src/bar.ts", ...])\``
 
 export const HandoffPlugin: Plugin = async (ctx) => {
   const processedSessions = new Set<string>()

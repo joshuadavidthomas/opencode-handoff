@@ -22,6 +22,11 @@ and this project attempts to adhere to [Semantic Versioning](https://semver.org/
 
 - Automatic file injection: @file references in handoff prompts are now automatically loaded into the new session's context
 
+### Changed
+
+- `handoff_session` now accepts `files` array argument
+- Restructured `/handoff` command prompt with XML sections (`<context>`, `<instructions>`, `<user_input>`)
+
 ## [0.2.0]
 
 ### Added
