@@ -58,13 +58,7 @@ Analyze this conversation and extract what matters for continuing the work.
 
 ## OUTPUT FORMAT
 
-1. LINE 1 (Required)
-   
-   Always start with exactly this line, replacing the placeholder with the current session ID:
-   
-   Continuing work from session [CURRENT_SESSION_ID]. When you lack specific information you can use read_session to get it.
-
-2. FILE REFERENCES
+1. FILE REFERENCES
    
    Include all relevant @file references on a SINGLE LINE, space-separated.
 
@@ -72,7 +66,7 @@ Analyze this conversation and extract what matters for continuing the work.
 
    Include files that will be edited, dependencies being touched, relevant tests, configs, and key reference docs. Be generous—the cost of an extra file is low; missing a critical one means another archaeology dig. Target 8-15 files, up to 20 for complex work.
 
-3. CONTEXT AND GOAL
+2. CONTEXT AND GOAL
 
    After the files, describe what we're working on and provide whatever context helps continue the work. Structure it based on what fits the conversation—could be tasks, findings, a simple paragraph, or detailed steps.
 
@@ -96,10 +90,15 @@ After generating the handoff message, IMMEDIATELY call handoff_prepare with the 
         prompt: tool.schema.string().describe("The generated handoff prompt"),
       },
       async execute(args, context) {
+        // Capture current session ID before switching to new session
+        const sourceSessionID = context.sessionID
+        const sessionReference = `Continuing work from session ${sourceSessionID}. When you lack specific information you can use read_session to get it.`
+        const fullPrompt = `${sessionReference}\n\n${args.prompt}`
+
         await ctx.client.tui.clearPrompt()
         await ctx.client.tui.executeCommand({ body: { command: "session_new" } })
         await new Promise(r => setTimeout(r, 200))
-        await ctx.client.tui.appendPrompt({ body: { text: args.prompt } })
+        await ctx.client.tui.appendPrompt({ body: { text: fullPrompt } })
 
         await ctx.client.tui.showToast({
           body: {
