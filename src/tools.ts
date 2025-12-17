@@ -37,10 +37,11 @@ export const HandoffSession = (client: OpencodeClient) => {
       // First append sets height in old session, session_new preserves textarea element,
       // second append populates new session with already-expanded textarea.
       await client.tui.clearPrompt()
-      await new Promise(r => setTimeout(r, 200))
+      await new Promise(r => setTimeout(r, 50))
       await client.tui.appendPrompt({ body: { text: fullPrompt } })
       await client.tui.executeCommand({ body: { command: "session_new" } })
-      await new Promise(r => setTimeout(r, 200))
+      await client.tui.clearPrompt()
+      await new Promise(r => setTimeout(r, 50))
       await client.tui.appendPrompt({ body: { text: fullPrompt } })
 
       await client.tui.showToast({

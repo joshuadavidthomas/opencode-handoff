@@ -18,6 +18,10 @@ and this project attempts to adhere to [Semantic Versioning](https://semver.org/
 
 ## [Unreleased]
 
+### Fixed
+
+- Added missing `clearPrompt` call to prevent double handoff prompt in new session
+
 ## [0.3.0]
 
 ### Added
