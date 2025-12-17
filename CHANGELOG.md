@@ -18,6 +18,15 @@ and this project attempts to adhere to [Semantic Versioning](https://semver.org/
 
 ## [Unreleased]
 
+### Added
+
+- `read_session` tool for reading conversation transcripts from previous sessions
+- Session ID reference in `/handoff` command template to enable cross-session context retrieval
+
+### Changed
+
+- Updated `/handoff` command template to include session reference line and formatted output structure
+
 ## [0.1.0]
 
 ### Added

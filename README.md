@@ -9,6 +9,7 @@ Inspired by Amp's handoff command - see their [post](https://ampcode.com/news/ha
 - `/handoff <goal>` command that analyzes the conversation and generates a continuation prompt
 - Guides the AI to include relevant `@file` references so the next session starts with context loaded
 - Opens a new session with the prompt as an editable draft
+- `read_session` tool for retrieving full conversation transcripts from previous sessions when the handoff summary isn't sufficient
 
 ## Requirements
 
@@ -52,6 +53,24 @@ ln -sf ~/.config/opencode/opencode-handoff/src/plugin.ts ~/.config/opencode/plug
 ```
 
 The AI analyzes the conversation, extracts key decisions and relevant files, generates a focused prompt, and creates a new session with that prompt ready to edit.
+
+### Reading Previous Session Transcripts
+
+When you use `/handoff`, the generated prompt includes a session reference line:
+
+```
+Continuing work from session sess_01jxyz123. When you lack specific information you can use read_session to get it.
+```
+
+This gives the AI in the new session access to the `read_session` tool, which can fetch the full conversation transcript from the source session. If the handoff summary doesn't include something you need, just ask - the AI can look it up.
+
+**Example:**
+
+```
+You: What were the specific error messages we saw earlier?
+```
+
+The AI will use `read_session` to retrieve details from the previous session that weren't included in the handoff summary.
 
 ## Contributing
 
