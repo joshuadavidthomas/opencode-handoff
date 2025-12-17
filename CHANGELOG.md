@@ -23,12 +23,16 @@ and this project attempts to adhere to [Semantic Versioning](https://semver.org/
 - `read_session` tool for reading conversation transcripts from previous sessions
 - Handoff prompts now automatically include a reference to the source session, enabling cross-session context retrieval
 
+### Changed
+
+- Renamed `handoff_prepare` tool to `handoff_session`
+
 ## [0.1.0]
 
 ### Added
 
 - `/handoff <goal>` command for creating focused continuation prompts
-- `handoff_prepare` tool for session creation with draft prompt
+- `handoff_session` tool for session creation with draft prompt
 - Inspired by Amp's handoff command
 
 ### New Contributors
