@@ -21,10 +21,16 @@ export const HandoffSession = (client: OpencodeClient) => {
     description: "Create a new session with the handoff prompt as an editable draft",
     args: {
       prompt: tool.schema.string().describe("The generated handoff prompt"),
+      files: tool.schema.array(tool.schema.string()).optional().describe("Array of file paths to load into the new session's context"),
     },
     async execute(args, context) {
       const sessionReference = `Continuing work from session ${context.sessionID}. When you lack specific information you can use read_session to get it.`
-      const fullPrompt = `${sessionReference}\n\n${args.prompt}`
+      const fileRefs = args.files?.length
+        ? args.files.map(f => `@${f.replace(/^@/, '')}`).join(' ')
+        : ''
+      const fullPrompt = fileRefs
+        ? `${sessionReference}\n\n${fileRefs}\n\n${args.prompt}`
+        : `${sessionReference}\n\n${args.prompt}`
 
       // Double-append workaround for textarea resize bug:
       // appendPrompt uses insertText() which bypasses onContentChange, so resize never triggers.
