@@ -78,14 +78,14 @@ The user controls what context matters. If they mentioned something to preserve,
 
 ---
 
-After generating the handoff message, IMMEDIATELY call handoff_prepare with the full message as a handoff prompt:
-\`handoff_prepare(prompt="...")\``,
+After generating the handoff message, IMMEDIATELY call handoff_session with the full message as a handoff prompt:
+\`handoff_session(prompt="...")\``,
     }
   },
 
   tool: {
-    handoff_prepare: tool({
-      description: "Prepare handoff by creating new session with generated prompt as draft",
+    handoff_session: tool({
+      description: "Create a new session with the handoff prompt as an editable draft",
       args: {
         prompt: tool.schema.string().describe("The generated handoff prompt"),
       },
