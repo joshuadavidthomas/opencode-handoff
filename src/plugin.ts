@@ -1,52 +1,8 @@
 import type { Plugin } from "@opencode-ai/plugin"
-import { tool } from "@opencode-ai/plugin"
+import { HandoffSession, ReadSession } from "./tools"
+import { parseFileReferences, buildFileParts } from "./files"
 
-function formatTranscript(messages: Array<{ info: any; parts: any[] }>, limit?: number): string {
-  const lines: string[] = []
-
-  for (const msg of messages) {
-    if (msg.info.role === "user") {
-      lines.push("## User")
-      for (const part of msg.parts) {
-        if (part.type === "text" && !part.ignored) {
-          lines.push(part.text)
-        }
-        if (part.type === "file") {
-          lines.push(`[Attached: ${part.filename || "file"}]`)
-        }
-      }
-      lines.push("")
-    }
-
-    if (msg.info.role === "assistant") {
-      lines.push("## Assistant")
-      for (const part of msg.parts) {
-        if (part.type === "text") {
-          lines.push(part.text)
-        }
-        if (part.type === "tool" && part.state.status === "completed") {
-          lines.push(`[Tool: ${part.tool}] ${part.state.title}`)
-        }
-      }
-      lines.push("")
-    }
-  }
-
-  const output = lines.join("\n").trim()
-
-  if (messages.length >= (limit ?? 100)) {
-    return output + `\n\n(Showing ${messages.length} most recent messages. Use a higher 'limit' to see more.)`
-  }
-
-  return output + `\n\n(End of session - ${messages.length} messages)`
-}
-
-export const HandoffPlugin: Plugin = async (ctx) => ({
-  config: async (config) => {
-    config.command = config.command || {}
-    config.command["handoff"] = {
-      description: "Create a focused handoff prompt for a new session",
-      template: `You are creating a handoff message to continue work in a new session.
+const HANDOFF_COMMAND = `You are creating a handoff message to continue work in a new session.
 
 User's goal: $ARGUMENTS
 
@@ -79,71 +35,65 @@ The user controls what context matters. If they mentioned something to preserve,
 ---
 
 After generating the handoff message, IMMEDIATELY call handoff_session with the full message as a handoff prompt:
-\`handoff_session(prompt="...")\``,
+\`handoff_session(prompt="...")\``
+
+export const HandoffPlugin: Plugin = async (ctx) => {
+  const processedSessions = new Set<string>()
+
+  return {
+    config: async (config) => {
+      config.command = config.command || {}
+      config.command["handoff"] = {
+        description: "Create a focused handoff prompt for a new session",
+        template: HANDOFF_COMMAND,
+      }
+    },
+
+    tool: {
+      handoff_session: HandoffSession(ctx.client),
+      read_session: ReadSession(ctx.client),
+    },
+
+    "chat.message": async (_input, output) => {
+      const sessionID = output.message.sessionID
+
+      if (processedSessions.has(sessionID)) return
+
+      // Get non-synthetic text from the message
+      const text = output.parts
+        .filter((p): p is typeof p & { type: "text"; text: string } =>
+          p.type === "text" && !p.synthetic && typeof p.text === "string"
+        )
+        .map(p => p.text)
+        .join("\n")
+
+      if (!text.includes("Continuing work from session")) return
+
+      processedSessions.add(sessionID)
+
+      const fileRefs = parseFileReferences(text)
+      if (fileRefs.size === 0) return
+
+      const fileParts = await buildFileParts(ctx.directory, fileRefs)
+      if (fileParts.length === 0) return
+
+      // Inject file parts via noReply
+      // Must pass model and agent to prevent mode/model switching
+      await ctx.client.session.prompt({
+        path: { id: sessionID },
+        body: {
+          noReply: true,
+          model: output.message.model,
+          agent: output.message.agent,
+          parts: fileParts,
+        },
+      })
+    },
+
+    event: async ({ event }) => {
+      if (event.type === "session.deleted") {
+        processedSessions.delete(event.properties.info.id)
+      }
     }
-  },
-
-  tool: {
-    handoff_session: tool({
-      description: "Create a new session with the handoff prompt as an editable draft",
-      args: {
-        prompt: tool.schema.string().describe("The generated handoff prompt"),
-      },
-      async execute(args, context) {
-        // Capture current session ID before switching to new session
-        const sourceSessionID = context.sessionID
-        const sessionReference = `Continuing work from session ${sourceSessionID}. When you lack specific information you can use read_session to get it.`
-        const fullPrompt = `${sessionReference}\n\n${args.prompt}`
-
-        // Double-append workaround for textarea resize bug:
-        // appendPrompt uses insertText() which bypasses onContentChange, so resize never triggers.
-        // First append sets height in old session, session_new preserves textarea element,
-        // second append populates new session with already-expanded textarea.
-        await ctx.client.tui.clearPrompt()
-        await new Promise(r => setTimeout(r, 200))
-        await ctx.client.tui.appendPrompt({ body: { text: fullPrompt } })
-        await ctx.client.tui.executeCommand({ body: { command: "session_new" } })
-        await new Promise(r => setTimeout(r, 200))
-        await ctx.client.tui.appendPrompt({ body: { text: fullPrompt } })
-
-        await ctx.client.tui.showToast({
-          body: {
-            title: "Handoff Ready",
-            message: "Review and edit the draft, then send",
-            variant: "success",
-            duration: 4000,
-          }
-        })
-
-        return "Handoff prompt created in new session. Review and edit before sending."
-      }
-    }),
-
-    read_session: tool({
-      description: "Read the conversation transcript from a previous session. Use this when you need specific information from the source session that wasn't included in the handoff summary.",
-      args: {
-        sessionID: tool.schema.string().describe("The full session ID (e.g., sess_01jxyz...)"),
-        limit: tool.schema.number().optional().describe("Maximum number of messages to read (defaults to 100, max 500)"),
-      },
-      async execute(args, context) {
-        const limit = Math.min(args.limit ?? 100, 500)
-
-        try {
-          const response = await ctx.client.session.messages({
-            path: { id: args.sessionID },
-            query: { limit }
-          })
-
-          if (!response.data || response.data.length === 0) {
-            return "Session has no messages or does not exist."
-          }
-
-          const formatted = formatTranscript(response.data, limit)
-          return formatted
-        } catch (error) {
-          return `Could not read session ${args.sessionID}: ${error instanceof Error ? error.message : 'Unknown error'}`
-        }
-      }
-    })
   }
-})
+}

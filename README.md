@@ -21,7 +21,7 @@ Add to your OpenCode config (`~/.config/opencode/config.json`):
 
 ```json
 {
-  "plugin": ["opencode-handoff@0.1.0"]
+  "plugin": ["opencode-handoff@0.2.0"]
 }
 ```
 
