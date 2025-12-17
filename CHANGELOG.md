@@ -18,6 +18,8 @@ and this project attempts to adhere to [Semantic Versioning](https://semver.org/
 
 ## [Unreleased]
 
+## [0.1.0]
+
 ### Added
 
 - `/handoff <goal>` command for creating focused continuation prompts
@@ -28,4 +30,5 @@ and this project attempts to adhere to [Semantic Versioning](https://semver.org/
 
 - Josh Thomas <josh@joshthomas.dev> (maintainer)
 
-[unreleased]: https://github.com/joshuadavidthomas/opencode-handoff/tree/main
+[unreleased]: https://github.com/joshuadavidthomas/opencode-handoff/compare/v0.1.0...HEAD
+[0.1.0]: https://github.com/joshuadavidthomas/opencode-handoff/releases/tag/v0.1.0
