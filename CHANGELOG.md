@@ -18,6 +18,15 @@ and this project attempts to adhere to [Semantic Versioning](https://semver.org/
 
 ## [Unreleased]
 
+### Changed
+
+- File injection now uses synthetic text parts instead of file parts
+- Extracted OpenCode-compatible code (binary detection, file formatting) to `vendor.ts` for maintainability
+
+### Fixed
+
+- Session title generation now works correctly in handoff sessions
+
 ## [0.3.1]
 
 ### Fixed

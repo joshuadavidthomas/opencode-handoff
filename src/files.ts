@@ -2,12 +2,13 @@
  * File reference parsing and building for handoff sessions.
  *
  * Handles extraction of @file references from handoff prompts and
- * building file parts for injection into new sessions.
+ * building synthetic text parts that match OpenCode's Read tool output format.
  */
 
 import * as path from "node:path"
 import * as fs from "node:fs/promises"
-import type { FilePartInput } from "@opencode-ai/sdk"
+import type { TextPartInput } from "@opencode-ai/sdk"
+import { isBinaryFile, formatFileContent } from "./vendor"
 
 /**
  * File reference regex matching OpenCode's internal pattern.
@@ -34,33 +35,53 @@ export function parseFileReferences(text: string): Set<string> {
 }
 
 /**
- * Build file parts for files that exist.
+ * Build synthetic text parts matching OpenCode's Read tool output.
+ *
+ * Creates two synthetic text parts for each file:
+ * 1. Header describing the Read tool call
+ * 2. Formatted file content with line numbers
  *
  * @param directory - Project directory to resolve relative paths against
  * @param refs - Set of file path references to check
- * @returns Array of file parts for existing files (non-existent files are skipped)
+ * @returns Array of synthetic text parts (non-existent and binary files are skipped)
  */
-export async function buildFileParts(
+export async function buildSyntheticFileParts(
   directory: string,
   refs: Set<string>
-): Promise<FilePartInput[]> {
-  const fileParts: FilePartInput[] = []
+): Promise<TextPartInput[]> {
+  const parts: TextPartInput[] = []
 
   for (const ref of refs) {
     const filepath = path.resolve(directory, ref)
 
     try {
-      await fs.stat(filepath)
-      fileParts.push({
-        type: "file",
-        mime: "text/plain",
-        url: `file://${filepath}`,
-        filename: ref,
+      // Check if file exists
+      const stats = await fs.stat(filepath)
+      if (!stats.isFile()) continue
+
+      // Skip binary files
+      if (await isBinaryFile(filepath)) continue
+
+      // Read file content
+      const content = await fs.readFile(filepath, "utf-8")
+
+      // Create header part (matching OpenCode's prompt.ts:820 format)
+      parts.push({
+        type: "text",
+        synthetic: true,
+        text: `Called the Read tool with the following input: ${JSON.stringify({ filePath: filepath })}`
+      })
+
+      // Create content part (matching OpenCode's ReadTool format)
+      parts.push({
+        type: "text",
+        synthetic: true,
+        text: formatFileContent(filepath, content)
       })
     } catch {
-      // Skip silently if file doesn't exist
+      // Skip silently if file can't be read
     }
   }
 
-  return fileParts
+  return parts
 }
