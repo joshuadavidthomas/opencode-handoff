@@ -1,6 +1,6 @@
 import type { Plugin } from "@opencode-ai/plugin"
 import { HandoffSession, ReadSession } from "./tools"
-import { parseFileReferences, buildFileParts } from "./files"
+import { parseFileReferences, buildSyntheticFileParts } from "./files"
 
 const HANDOFF_COMMAND = `GOAL: You are creating a handoff message to continue work in a new session.
 
@@ -76,7 +76,7 @@ export const HandoffPlugin: Plugin = async (ctx) => {
       const fileRefs = parseFileReferences(text)
       if (fileRefs.size === 0) return
 
-      const fileParts = await buildFileParts(ctx.directory, fileRefs)
+      const fileParts = await buildSyntheticFileParts(ctx.directory, fileRefs)
       if (fileParts.length === 0) return
 
       // Inject file parts via noReply
