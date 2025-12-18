@@ -22,6 +22,7 @@ and this project attempts to adhere to [Semantic Versioning](https://semver.org/
 
 - File injection now uses synthetic text parts instead of file parts
 - Extracted OpenCode-compatible code (binary detection, file formatting) to `vendor.ts` for maintainability
+- Clarified user input section of handoff prompt to treat input as direction, not investigation triggers
 
 ### Fixed
 

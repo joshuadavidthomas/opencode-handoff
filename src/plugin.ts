@@ -29,7 +29,9 @@ The user controls what context matters. If they mentioned something to preserve,
 </instructions>
 
 <user_input>
-The user's guidance for continuing work. If empty, the handoff should capture a natural continuation of the current conversation's direction.
+This is what the next session should focus on. Use it to shape your handoff's direction—don't investigate or search, just incorporate the intent into your context and goals.
+
+If empty, capture a natural continuation of the current conversation's direction.
 
 USER: $ARGUMENTS
 </user_input>
