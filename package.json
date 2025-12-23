@@ -1,6 +1,6 @@
 {
   "name": "opencode-handoff",
-  "version": "0.3.2",
+  "version": "0.4.0",
   "type": "module",
   "description": "Create focused handoff prompts for continuing work in new OpenCode sessions",
   "author": "Josh Thomas <josh@joshthomas.dev>",
