@@ -21,8 +21,8 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
-    "@opencode-ai/plugin": "^1.0.143",
-    "@opencode-ai/sdk": "^1.0.143",
+    "@opencode-ai/plugin": "^1.0.188",
+    "@opencode-ai/sdk": "^1.0.188",
     "zod": "^4.1.13"
   },
   "devDependencies": {

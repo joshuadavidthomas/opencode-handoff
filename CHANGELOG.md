@@ -18,6 +18,11 @@ and this project attempts to adhere to [Semantic Versioning](https://semver.org/
 
 ## [Unreleased]
 
+### Changed
+
+- Simplified handoff session creation by removing textarea resize workaround (see [sst/opencode#5983](https://github.com/sst/opencode/pull/5983))
+- Updated minimum OpenCode version requirement to 1.0.188
+
 ## [0.3.2]
 
 ### Changed
