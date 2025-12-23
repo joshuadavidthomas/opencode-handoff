@@ -32,16 +32,7 @@ export const HandoffSession = (client: OpencodeClient) => {
         ? `${sessionReference}\n\n${fileRefs}\n\n${args.prompt}`
         : `${sessionReference}\n\n${args.prompt}`
 
-      // Double-append workaround for textarea resize bug:
-      // appendPrompt uses insertText() which bypasses onContentChange, so resize never triggers.
-      // First append sets height in old session, session_new preserves textarea element,
-      // second append populates new session with already-expanded textarea.
-      await client.tui.clearPrompt()
-      await new Promise(r => setTimeout(r, 50))
-      await client.tui.appendPrompt({ body: { text: fullPrompt } })
       await client.tui.executeCommand({ body: { command: "session_new" } })
-      await client.tui.clearPrompt()
-      await new Promise(r => setTimeout(r, 50))
       await client.tui.appendPrompt({ body: { text: fullPrompt } })
 
       await client.tui.showToast({
