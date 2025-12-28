@@ -21,14 +21,21 @@ Add to your OpenCode config (`~/.config/opencode/opencode.json`):
 
 ```json
 {
-  "plugin": ["opencode-handoff@0.4.0"]
+  "plugin": ["opencode-handoff"]
 }
 ```
 
 Restart OpenCode and you're ready to go.
 
-Pin to a specific version to ensure updates work correctly - OpenCode's lockfile won't re-resolve unpinned versions. To upgrade, change the version and restart.
+Optionally, pin to a specific version for stability:
 
+```json
+{
+  "plugin": ["opencode-handoff@0.4.0"]
+}
+```
+
+OpenCode fetches unpinned plugins from npm on each startup; pinned versions are cached and require a manual version bump to update.
 ### Local Development
 
 If you want to customize or contribute:
