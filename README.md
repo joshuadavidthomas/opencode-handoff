@@ -17,7 +17,7 @@ Inspired by Amp's handoff command - see their [post](https://ampcode.com/news/ha
 
 ## Installation
 
-Add to your OpenCode config (`~/.config/opencode/config.json`):
+Add to your OpenCode config (`~/.config/opencode/opencode.json`):
 
 ```json
 {
