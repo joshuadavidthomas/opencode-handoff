@@ -33,6 +33,11 @@ export const HandoffSession = (client: OpencodeClient) => {
         : `${sessionReference}\n\n${args.prompt}`
 
       await client.tui.executeCommand({ body: { command: "session_new" } })
+      // session_new is fire-and-forget (publishes a bus event, returns immediately).
+      // The TUI needs time to navigate to the home screen and mount the new prompt
+      // input before appendPrompt can insert text — otherwise the event is silently
+      // dropped because the input component doesn't exist yet.
+      await new Promise(r => setTimeout(r, 150))
       await client.tui.appendPrompt({ body: { text: fullPrompt } })
 
       await client.tui.showToast({
