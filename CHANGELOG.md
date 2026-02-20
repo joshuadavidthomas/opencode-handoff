@@ -18,6 +18,8 @@ and this project attempts to adhere to [Semantic Versioning](https://semver.org/
 
 ## [Unreleased]
 
+## [0.4.1]
+
 ### Fixed
 
 - Fixed race condition where handoff prompt text was silently dropped because `appendPrompt` fired before the TUI finished navigating to the new session ([#16](https://github.com/joshuadavidthomas/opencode-handoff/issues/16))
@@ -81,10 +83,11 @@ and this project attempts to adhere to [Semantic Versioning](https://semver.org/
 
 - Josh Thomas <josh@joshthomas.dev> (maintainer)
 
-[unreleased]: https://github.com/joshuadavidthomas/opencode-handoff/compare/v0.4.0...HEAD
+[unreleased]: https://github.com/joshuadavidthomas/opencode-handoff/compare/v0.4.1...HEAD
 [0.1.0]: https://github.com/joshuadavidthomas/opencode-handoff/releases/tag/v0.1.0
 [0.2.0]: https://github.com/joshuadavidthomas/opencode-handoff/releases/tag/v0.2.0
 [0.3.0]: https://github.com/joshuadavidthomas/opencode-handoff/releases/tag/v0.3.0
 [0.3.1]: https://github.com/joshuadavidthomas/opencode-handoff/releases/tag/v0.3.1
 [0.3.2]: https://github.com/joshuadavidthomas/opencode-handoff/releases/tag/v0.3.2
 [0.4.0]: https://github.com/joshuadavidthomas/opencode-handoff/releases/tag/v0.4.0
+[0.4.1]: https://github.com/joshuadavidthomas/opencode-handoff/releases/tag/v0.4.1

@@ -31,7 +31,7 @@ Optionally, pin to a specific version for stability:
 
 ```json
 {
-  "plugin": ["opencode-handoff@0.4.0"]
+  "plugin": ["opencode-handoff@0.4.1"]
 }
 ```
 
