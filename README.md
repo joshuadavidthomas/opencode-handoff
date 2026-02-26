@@ -13,7 +13,7 @@ Inspired by Amp's handoff command - see their [post](https://ampcode.com/news/ha
 
 ## Requirements
 
-- [OpenCode](https://opencode.ai/) v1.0.188 or later
+- [OpenCode](https://opencode.ai/) v1.2.15 or later
 
 ## Installation
 
@@ -31,20 +31,11 @@ Optionally, pin to a specific version for stability:
 
 ```json
 {
-  "plugin": ["opencode-handoff@0.4.1"]
+  "plugin": ["opencode-handoff@0.5.0"]
 }
 ```
 
 OpenCode fetches unpinned plugins from npm on each startup; pinned versions are cached and require a manual version bump to update.
-### Local Development
-
-If you want to customize or contribute:
-
-```bash
-git clone https://github.com/joshuadavidthomas/opencode-handoff ~/.config/opencode/opencode-handoff
-mkdir -p ~/.config/opencode/plugin
-ln -sf ~/.config/opencode/opencode-handoff/src/plugin.ts ~/.config/opencode/plugin/handoff.ts
-```
 
 ## Usage
 
