@@ -37,6 +37,29 @@ Optionally, pin to a specific version for stability:
 
 OpenCode fetches unpinned plugins from npm on each startup; pinned versions are cached and require a manual version bump to update.
 
+## Configuration
+
+### `serverClient.enabled`
+
+When running `opencode serve` with multiple `opencode attach` clients, the `/handoff` command broadcasts to all connected clients by default — every client navigates to a new session with the same prompt.
+
+Set `serverClient.enabled` to `true` to use direct API calls instead of TUI broadcasts. This ensures only the server-side session is affected, leaving other attached clients undisturbed.
+
+```json
+{
+  "plugin": [["opencode-handoff", { "serverClient": { "enabled": true } }]]
+}
+```
+
+**Behavior difference:**
+
+| Setting | Behavior |
+|---------|----------|
+| `serverClient.enabled: false` (default) | Opens a new session as an editable draft via TUI broadcast |
+| `serverClient.enabled: true` | Creates a new session and sends the prompt via API — the new session starts processing immediately |
+
+> **Note:** When `serverClient.enabled: true`, the handoff prompt is sent directly to the new session without an editable draft step. The AI in the new session begins working immediately.
+
 ## Usage
 
 1. Have a conversation in OpenCode with some context
