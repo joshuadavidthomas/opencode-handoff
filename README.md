@@ -70,9 +70,9 @@ Alternatively, if you have manually cloned the repository:
 | Setting | Behavior |
 |---------|----------|
 | `serverClient.enabled: false` (default) | Opens a new session as an editable draft via TUI broadcast |
-| `serverClient.enabled: true` | Creates a new session and sends the prompt via API — the new session starts processing immediately |
+| `serverClient.enabled: true` | Creates a new session and sends the prompt via API — the new session starts processing immediately. You remain in your current session and must switch to the new one manually. |
 
-> **Note:** When `serverClient.enabled: true`, the handoff prompt is sent directly to the new session without an editable draft step. The AI in the new session begins working immediately.
+> **Note:** When `serverClient.enabled: true`, the handoff prompt is sent directly to the new session without an editable draft step. The AI in the new session begins working immediately. You remain in your current session — switch to the new one via `/sessions` in the TUI or `opencode attach` in a terminal.
 
 ## Usage
 
