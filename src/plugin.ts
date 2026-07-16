@@ -41,7 +41,8 @@ USER: $ARGUMENTS
 After generating the handoff message, IMMEDIATELY call handoff_session with your prompt and files:
 \`handoff_session(prompt="...", files=["src/foo.ts", "src/bar.ts", ...])\``
 
-export const HandoffPlugin: Plugin = async (ctx) => {
+export const HandoffPlugin: Plugin = async (ctx, options) => {
+  const serverClient = { enabled: (options as { serverClient?: { enabled?: boolean } } | undefined)?.serverClient?.enabled === true }
   const processedSessions = new Set<string>()
 
   return {
@@ -54,7 +55,7 @@ export const HandoffPlugin: Plugin = async (ctx) => {
     },
 
     tool: {
-      handoff_session: HandoffSession(ctx.client),
+      handoff_session: HandoffSession(ctx.client, serverClient),
       read_session: ReadSession(ctx.client),
     },
 
