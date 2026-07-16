@@ -50,7 +50,7 @@ Set `serverClient.enabled` to `true` to use direct API calls instead of TUI broa
   "plugin": 
     ["opencode-handoff", { 
       "serverClient": { "enabled": true } 
-    }],
+    }]
 }
 ```
 
@@ -60,7 +60,7 @@ Alternatively, if you have manually cloned the repository:
   "plugin": 
     ["/complete/path/to/cloned/repository", { 
       "serverClient": { "enabled": true } 
-    }],
+    }]
 }
 ```
 
