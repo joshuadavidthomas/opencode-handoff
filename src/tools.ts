@@ -17,9 +17,7 @@ export type OpencodeClient = PluginInput["client"]
  * Takes the OpenCode client as a dependency for TUI and session operations.
  */
 export const HandoffSession = (client: OpencodeClient, serverClient: { enabled: boolean }) => {
-  return tool({
-    description: "Create a new session with the handoff prompt as an editable draft",
-    args: {
+    description: "Create a new session with the handoff prompt (editable draft via TUI by default; direct API send when serverClient.enabled is true)",
       prompt: tool.schema.string().describe("The generated handoff prompt"),
       files: tool.schema.array(tool.schema.string()).optional().describe("Array of file paths to load into the new session's context"),
     },
