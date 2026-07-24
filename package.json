@@ -18,6 +18,7 @@
   "main": "src/plugin.ts",
   "files": ["src", "README.md"],
   "scripts": {
+    "test": "bun test",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
