@@ -16,9 +16,9 @@ export type OpencodeClient = PluginInput["client"]
  *
  * Takes the OpenCode client as a dependency for TUI and session operations.
  */
-export const HandoffSession = (client: OpencodeClient) => {
+export const HandoffSession = (client: OpencodeClient, serverClient: { enabled: boolean }) => {
   return tool({
-    description: "Create a new session with the handoff prompt as an editable draft",
+    description: "Create a new session with the handoff prompt (editable draft via TUI by default; direct API send when serverClient.enabled is true)",
     args: {
       prompt: tool.schema.string().describe("The generated handoff prompt"),
       files: tool.schema.array(tool.schema.string()).optional().describe("Array of file paths to load into the new session's context"),
@@ -32,24 +32,42 @@ export const HandoffSession = (client: OpencodeClient) => {
         ? `${sessionReference}\n\n${fileRefs}\n\n${args.prompt}`
         : `${sessionReference}\n\n${args.prompt}`
 
-      await client.tui.executeCommand({ body: { command: "session_new" } })
-      // session_new is fire-and-forget (publishes a bus event, returns immediately).
-      // The TUI needs time to navigate to the home screen and mount the new prompt
-      // input before appendPrompt can insert text — otherwise the event is silently
-      // dropped because the input component doesn't exist yet.
-      await new Promise(r => setTimeout(r, 150))
-      await client.tui.appendPrompt({ body: { text: fullPrompt } })
-
-      await client.tui.showToast({
-        body: {
-          title: "Handoff Ready",
-          message: "Review and edit the draft, then send",
-          variant: "success",
-          duration: 4000,
+      if (serverClient.enabled) {
+        // Use session API when the server client is enabled (no TUI broadcasts)
+        try {
+          const newSession = await client.session.create()
+          if (!newSession.data?.id) {
+            return "Failed to create new session: no session ID returned"
+          }
+          await client.session.promptAsync({
+            path: { id: newSession.data.id },
+            body: { parts: [{ type: "text", text: fullPrompt }] },
+          })
+          return "Handoff session created and prompt sent. The new session has started processing the handoff."
+        } catch (error) {
+          return `Failed to create handoff session: ${error instanceof Error ? error.message : 'Unknown error'}`
         }
-      })
+      } else {
+        // Default: use TUI broadcast behavior
+        await client.tui.executeCommand({ body: { command: "session_new" } })
+        // session_new is fire-and-forget (publishes a bus event, returns immediately).
+        // The TUI needs time to navigate to the home screen and mount the new prompt
+        // input before appendPrompt can insert text — otherwise the event is silently
+        // dropped because the input component doesn't exist yet.
+        await new Promise(r => setTimeout(r, 150))
+        await client.tui.appendPrompt({ body: { text: fullPrompt } })
 
-      return "Handoff prompt created in new session. Review and edit before sending."
+        await client.tui.showToast({
+          body: {
+            title: "Handoff Ready",
+            message: "Review and edit the draft, then send",
+            variant: "success",
+            duration: 4000,
+          }
+        })
+
+        return "Handoff prompt created in new session. Review and edit before sending."
+      }
     }
   })
 }
