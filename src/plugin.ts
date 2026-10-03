@@ -1,6 +1,17 @@
-import type { Plugin } from "@opencode-ai/plugin"
-import { HandoffSession, ReadSession } from "./tools"
-import { parseFileReferences, buildSyntheticFileParts } from "./files"
+/**
+ * opencode-handoff plugin (OpenCode V2 API).
+ *
+ * V1 -> V2 mapping:
+ * - V1 `config` command template -> `ctx.command.transform` with execute()
+ * - V1 `tool` map (tool() helper) -> `ctx.tool.transform` (JSON Schema + { content } result)
+ * - V1 `chat.message` hook -> `ctx.session.hook("prompt")` (admission-time injection)
+ * - V1 `event` hook -> `ctx.event.subscribe()` with AbortController cleanup
+ */
+import * as path from "node:path"
+import { pathToFileURL } from "node:url"
+import { Plugin } from "@opencode/plugin"
+import { parseFileReferences, resolveHandoffFiles, FILE_REGEX } from "./files"
+import { createHandoffSessionTool, createReadSessionTool } from "./tools"
 
 const HANDOFF_COMMAND = `GOAL: You are creating a handoff message to continue work in a new session.
 
@@ -40,64 +51,89 @@ USER: $ARGUMENTS
 
 After generating the handoff message, IMMEDIATELY call handoff_session with your prompt and files:
 \`handoff_session(prompt="...", files=["src/foo.ts", "src/bar.ts", ...])\``
+const HANDOFF_MARKER = "Continuing work from session"
 
-export const HandoffPlugin: Plugin = async (ctx) => {
-  const processedSessions = new Set<string>()
+export default Plugin.define({
+  id: "opencode-handoff",
+  async setup(ctx) {
+    const processedSessions = new Set<string>()
 
-  return {
-    config: async (config) => {
-      config.command = config.command || {}
-      config.command["handoff"] = {
+    // V1 `config.command["handoff"]` template -> V2 command transform.
+    // The user's command arguments arrive as prompt.text ($ARGUMENTS).
+    await ctx.command.transform((editor) => {
+      editor.add({
+        name: "handoff",
         description: "Create a focused handoff prompt for a new session",
-        template: HANDOFF_COMMAND,
-      }
-    },
+        execute: async ({ sessionID, prompt, delivery }) => {
+          const text = HANDOFF_COMMAND.replace("$ARGUMENTS", prompt.text ?? "")
+          await ctx.session.prompt({
+            sessionID,
+            text,
+            files: prompt.files,
+            delivery,
+          })
+        },
+      })
+    })
 
-    tool: {
-      handoff_session: HandoffSession(ctx.client),
-      read_session: ReadSession(ctx.client),
-    },
+    // V1 `tool` map -> V2 tool transform (JSON Schema inputs, { content } results).
+    await ctx.tool.transform((editor) => {
+      editor.add(createHandoffSessionTool(ctx))
+      editor.add(createReadSessionTool(ctx))
+    })
 
-    "chat.message": async (_input, output) => {
-      const sessionID = output.message.sessionID
+    // V1 `chat.message` (post-message injection of synthetic Read parts via a
+    // noReply prompt) -> V2 `prompt` hook (admission-time injection).
+    // When the handoff prompt is admitted, resolve its @file references and
+    // attach them so they follow the normal attachment resolution path.
+    // Resolved refs are de-sigiled (`@a` -> "`a`") so the mention resolver
+    // does not load them a second time.
+    await ctx.session.hook("prompt", async (event) => {
+      const sessionID = event.sessionID
 
       if (processedSessions.has(sessionID)) return
 
-      // Get non-synthetic text from the message
-      const text = output.parts
-        .filter((p): p is typeof p & { type: "text"; text: string } =>
-          p.type === "text" && !p.synthetic && typeof p.text === "string"
-        )
-        .map(p => p.text)
-        .join("\n")
-
-      if (!text.includes("Continuing work from session")) return
+      const text = event.prompt.text ?? ""
+      if (!text.includes(HANDOFF_MARKER)) return
 
       processedSessions.add(sessionID)
 
       const fileRefs = parseFileReferences(text)
       if (fileRefs.size === 0) return
 
-      const fileParts = await buildSyntheticFileParts(ctx.directory, fileRefs)
-      if (fileParts.length === 0) return
+      const files = await resolveHandoffFiles(ctx.location.directory, fileRefs)
+      if (files.length === 0) return
 
-      // Inject file parts via noReply
-      // Must pass model and agent to prevent mode/model switching
-      await ctx.client.session.prompt({
-        path: { id: sessionID },
-        body: {
-          noReply: true,
-          model: output.message.model,
-          agent: output.message.agent,
-          parts: fileParts,
-        },
-      })
-    },
-
-    event: async ({ event }) => {
-      if (event.type === "session.deleted") {
-        processedSessions.delete(event.properties.info.id)
+      event.prompt.files ??= []
+      for (const filepath of files) {
+        event.prompt.files.push({ uri: pathToFileURL(filepath).href })
       }
-    }
-  }
-}
+
+      // De-sigil resolved refs (`@a` -> "`a`") so the mention resolver does
+      // not load them a second time. Unresolved refs keep their @sigil so
+      // normal resolution can still attempt them.
+      const resolvedPaths = new Set(files)
+      const resolvedRefs = new Set(
+        [...fileRefs].filter((ref) =>
+          resolvedPaths.has(path.resolve(ctx.location.directory, ref))
+        )
+      )
+      event.prompt.text = text.replace(FILE_REGEX, (match, ref: string) =>
+        resolvedRefs.has(ref) ? `\`${ref}\`` : match
+      )
+    })
+
+    // V1 `event` hook (session.deleted resets injection state) -> V2 event
+    // subscription, aborted in the setup cleanup function.
+    const controller = new AbortController()
+    void (async () => {
+      for await (const event of ctx.event.subscribe({ signal: controller.signal })) {
+        if (event.type === "session.deleted") {
+          processedSessions.delete(event.data.sessionID)
+        }
+      }
+    })()
+
+    return () => controller.abort()
+  },
+})

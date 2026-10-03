@@ -1,143 +1,151 @@
 import { describe, expect, test } from "bun:test"
-import type { PluginInput } from "@opencode-ai/plugin"
+import type { Plugin } from "@opencode/plugin"
 import { mkdtemp, rm, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
-import { HandoffPlugin } from "../src/plugin"
-import type { OpencodeClient } from "../src/tools"
+import plugin from "../src/plugin"
 
-function createPluginInput(
-  directory: string,
-  client: OpencodeClient
-): PluginInput {
-  return {
-    client,
-    directory,
-    worktree: directory,
-    project: {},
-    serverUrl: new URL("http://localhost"),
-    $: {},
-  } as unknown as PluginInput
+type Context = Plugin.Context
+
+interface CapturedHook {
+  name: string
+  callback: (event: any) => unknown
 }
 
-describe("HandoffPlugin", () => {
-  test("registers the handoff command and tools", async () => {
-    const client = {} as OpencodeClient
-    const hooks = await HandoffPlugin(createPluginInput("/tmp/project", client))
-    const freshConfig: {
-      command?: Record<string, { description: string; template: string }>
-    } = {}
-    await hooks.config!(freshConfig as never)
-    expect(freshConfig.command?.handoff).toBeDefined()
+function createEventBus() {
+  const queue: Array<any> = []
+  const waiters: Array<() => void> = []
+  return {
+    push(event: any) {
+      queue.push(event)
+      waiters.splice(0).forEach((wake) => wake())
+    },
+    async *subscribe(): AsyncGenerator<any> {
+      let index = 0
+      for (;;) {
+        if (index < queue.length) {
+          yield queue[index++]
+          continue
+        }
+        await new Promise<void>((resolve) => waiters.push(resolve))
+      }
+    },
+  }
+}
 
-    const config: {
-      command: Record<string, { description: string; template: string }>
-    } = {
-      command: {
-        existing: { description: "Existing command", template: "keep me" },
+function createCtx(directory: string, session: Record<string, unknown> = {}) {
+  const tools: Array<any> = []
+  const commands: Array<any> = []
+  const hooks: Array<CapturedHook> = []
+  const bus = createEventBus()
+  const ctx = {
+    location: { directory },
+    session: {
+      hook: async (name: string, callback: (event: any) => unknown) => {
+        hooks.push({ name, callback })
+        return { dispose: async () => {} }
       },
-    }
-    await hooks.config!(config as never)
+      ...session,
+    },
+    tool: {
+      transform: async (callback: (editor: any) => void) => {
+        callback({ add: (tool: any) => tools.push(tool) })
+        return { dispose: async () => {} }
+      },
+    },
+    command: {
+      transform: async (callback: (editor: any) => void) => {
+        callback({ add: (command: any) => commands.push(command) })
+        return { dispose: async () => {} }
+      },
+    },
+    event: {
+      subscribe: (options?: { signal?: AbortSignal }) => bus.subscribe(),
+    },
+  } as unknown as Context
+  return { ctx, tools, commands, hooks, bus }
+}
 
-    expect(config.command.existing).toEqual({
-      description: "Existing command",
-      template: "keep me",
+const tick = () => new Promise((resolve) => setTimeout(resolve, 20))
+
+describe("HandoffPlugin (V2)", () => {
+  test("registers the handoff command and tools", async () => {
+    const promptCalls: unknown[] = []
+    const { ctx, tools, commands } = createCtx("/tmp/project", {
+      prompt: async (input: unknown) => {
+        promptCalls.push(input)
+      },
     })
-    expect(config.command.handoff?.template).toContain("USER: $ARGUMENTS")
-    expect(hooks.tool?.handoff_session).toBeDefined()
-    expect(hooks.tool?.read_session).toBeDefined()
+
+    const cleanup = await plugin.setup(ctx)
+    expect(typeof cleanup === "function" || cleanup === undefined).toBe(true)
+
+    expect(commands.map((c) => c.name)).toEqual(["handoff"])
+    expect(commands[0]?.description).toContain("handoff")
+    expect(tools.map((t) => t.name).sort()).toEqual([
+      "handoff_session",
+      "read_session",
+    ])
+
+    await commands[0]?.execute({
+      sessionID: "sess_1",
+      prompt: { text: "implement auth" },
+      delivery: "steer",
+    })
+
+    expect(promptCalls).toHaveLength(1)
+    const call = promptCalls[0] as { sessionID: string; text: string }
+    expect(call.sessionID).toBe("sess_1")
+    expect(call.text).toContain("GOAL:")
+    expect(call.text).toContain("implement auth")
+    expect(call.text).not.toContain("$ARGUMENTS")
   })
 
-  test("injects referenced files once and resets after session deletion", async () => {
+  test("attaches referenced files once and resets after session deletion", async () => {
     const directory = await mkdtemp(join(tmpdir(), "opencode-handoff-plugin-"))
 
     try {
       await writeFile(join(directory, "note.txt"), "handoff context")
-      const promptCalls: unknown[] = []
-      const client = {
-        session: {
-          async prompt(input: unknown) {
-            promptCalls.push(input)
-          },
-        },
-      } as unknown as OpencodeClient
-      const hooks = await HandoffPlugin(createPluginInput(directory, client))
-      const message = {
-        message: {
-          sessionID: "sess_next",
-          model: { providerID: "provider", modelID: "model" },
-          agent: "build",
-        },
-        parts: [
-          {
-            type: "text",
-            synthetic: true,
-            text: "Continuing work from session ignored @missing.txt",
-          },
-          {
-            type: "text",
-            text: "Continuing work from session sess_source @note.txt",
-          },
-        ],
-      }
+      const { ctx, hooks, bus } = createCtx(directory)
 
-      await hooks["chat.message"]!(
-        { sessionID: "sess_next" } as never,
-        {
-          message: message.message,
-          parts: [{ type: "text", text: "ordinary message @note.txt" }],
-        } as never
-      )
-      expect(promptCalls).toHaveLength(0)
+      const cleanup = await plugin.setup(ctx)
+      const promptHook = hooks.find((h) => h.name === "prompt")
+      expect(promptHook).toBeDefined()
 
-      await hooks["chat.message"]!(
-        { sessionID: "sess_next" } as never,
-        message as never
-      )
-      await hooks["chat.message"]!(
-        { sessionID: "sess_next" } as never,
-        message as never
-      )
+      const handoffText =
+        "Continuing work from session sess_source @note.txt @missing.txt"
 
-      expect(promptCalls).toHaveLength(1)
-      const promptCall = promptCalls[0] as {
-        path: { id: string }
-        body: {
-          noReply: boolean
-          model: unknown
-          agent: string
-          parts: Array<{ synthetic?: boolean; text: string }>
-        }
-      }
-      expect(promptCall).toMatchObject({
-        path: { id: "sess_next" },
-        body: {
-          noReply: true,
-          model: { providerID: "provider", modelID: "model" },
-          agent: "build",
-        },
-      })
-      expect(promptCall.body.parts).toHaveLength(2)
-      expect(promptCall.body.parts.every((part) => part.synthetic)).toBe(true)
-      expect(promptCall.body.parts.map((part) => part.text).join("\n")).toContain(
-        "handoff context"
-      )
-      expect(promptCall.body.parts.map((part) => part.text).join("\n")).not.toContain(
-        "missing.txt"
-      )
+      // Non-handoff prompts are ignored.
+      const ordinary = { sessionID: "sess_next", prompt: { text: "ordinary message @note.txt", files: [] as any[] } }
+      await promptHook!.callback(ordinary)
+      expect(ordinary.prompt.files).toHaveLength(0)
 
-      await hooks.event!({
-        event: {
-          type: "session.deleted",
-          properties: { info: { id: "sess_next" } },
-        },
-      } as never)
-      await hooks["chat.message"]!(
-        { sessionID: "sess_next" } as never,
-        message as never
-      )
+      const first = { sessionID: "sess_next", prompt: { text: handoffText, files: [] as any[] } }
+      await promptHook!.callback(first)
 
-      expect(promptCalls).toHaveLength(2)
+      // note.txt attached; missing.txt has no @sigil stripped but is not attached.
+      expect(first.prompt.files).toHaveLength(1)
+      expect(first.prompt.files[0]?.uri).toContain("note.txt")
+      expect(first.prompt.text).not.toContain("@note.txt")
+      expect(first.prompt.text).toContain("`note.txt`")
+      expect(first.prompt.text).toContain("@missing.txt")
+
+      // Second admission for the same session is a no-op.
+      const second = { sessionID: "sess_next", prompt: { text: handoffText, files: [] as any[] } }
+      await promptHook!.callback(second)
+      expect(second.prompt.files).toHaveLength(0)
+      expect(second.prompt.text).toBe(handoffText)
+
+      // Session deletion resets the once-only state.
+      bus.push({ type: "session.deleted", data: { sessionID: "sess_next" } })
+      await tick()
+      await tick()
+
+      const third = { sessionID: "sess_next", prompt: { text: handoffText, files: [] as any[] } }
+      await promptHook!.callback(third)
+      expect(third.prompt.files).toHaveLength(1)
+
+      expect(() => (cleanup as unknown as () => void)?.()).not.toThrow()
     } finally {
       await rm(directory, { recursive: true, force: true })
     }

@@ -18,6 +18,22 @@ and this project attempts to adhere to [Semantic Versioning](https://semver.org/
 
 ## [Unreleased]
 
+### Changed
+
+- Ported the plugin to the OpenCode V2 plugin API (`@opencode/plugin` 2.0.22,
+  `Plugin.define({ id: "opencode-handoff", setup })`). Requires OpenCode
+  2.0.22 or later; V1 is no longer supported.
+- `handoff_session` now creates the new session server-side and submits the
+  handoff prompt to it directly (the V2 API exposes no TUI domain, so the
+  editable-draft flow is gone).
+- Handoff file injection moved from post-message synthetic `Read` parts to
+  admission-time file attachments via the `prompt` session hook. Resolved
+  `@file` refs are de-sigiled so they are not loaded twice.
+
+### Removed
+
+- Dropped `@opencode-ai/plugin`, `@opencode-ai/sdk`, and `zod` dependencies.
+
 ## [0.5.0]
 
 ### Changed 

@@ -1,86 +1,79 @@
 import { describe, expect, test } from "bun:test"
-import type { ToolContext } from "@opencode-ai/plugin"
-import { HandoffSession, ReadSession, type OpencodeClient } from "../src/tools"
+import type { Plugin } from "@opencode/plugin"
+import { createHandoffSessionTool, createReadSessionTool } from "../src/tools"
 
-function createToolContext(sessionID: string): ToolContext {
+type Context = Plugin.Context
+
+function createCtx(overrides: Record<string, unknown> = {}): Context {
   return {
-    sessionID,
-    messageID: "msg_test",
-    agent: "build",
-    directory: "/tmp/project",
-    worktree: "/tmp/project",
-    abort: new AbortController().signal,
-    metadata() {},
-    async ask() {},
-  }
+    session: {},
+    ...overrides,
+  } as unknown as Context
 }
 
 describe("HandoffSession", () => {
-  test("opens a new session with an editable handoff draft", async () => {
+  test("creates a new session and submits the handoff prompt", async () => {
     const calls: Array<{ name: string; input: unknown }> = []
-    const client = {
-      tui: {
-        async executeCommand(input: unknown) {
-          calls.push({ name: "executeCommand", input })
+    const ctx = createCtx({
+      session: {
+        async create(input: unknown) {
+          calls.push({ name: "create", input })
+          return { id: "sess_new" }
         },
-        async appendPrompt(input: unknown) {
-          calls.push({ name: "appendPrompt", input })
-        },
-        async showToast(input: unknown) {
-          calls.push({ name: "showToast", input })
+        async prompt(input: unknown) {
+          calls.push({ name: "prompt", input })
         },
       },
-    } as unknown as OpencodeClient
+    })
 
-    const result = await HandoffSession(client).execute(
+    const tool = createHandoffSessionTool(ctx)
+    expect(tool.name).toBe("handoff_session")
+
+    const result = await tool.execute(
       {
         prompt: "Continue implementation",
         files: ["src/files.ts", "@README.md"],
       },
-      createToolContext("sess_source")
+      { sessionID: "sess_source" } as never
     )
 
-    expect(calls.map((call) => call.name)).toEqual([
-      "executeCommand",
-      "appendPrompt",
-      "showToast",
-    ])
-    expect(calls[0]?.input).toEqual({ body: { command: "session_new" } })
+    expect(calls.map((call) => call.name)).toEqual(["create", "prompt"])
+    expect(calls[0]?.input).toEqual({ title: "Handoff" })
 
-    const appended = calls[1]?.input as { body: { text: string } }
-    expect(appended.body.text).toContain("Continuing work from session sess_source")
-    expect(appended.body.text).toContain("@src/files.ts @README.md")
-    expect(appended.body.text).toContain("Continue implementation")
-    expect(calls[2]?.input).toMatchObject({ body: { variant: "success" } })
-    expect(result).toContain("Review and edit")
+    const prompted = calls[1]?.input as { sessionID: string; text: string }
+    expect(prompted.sessionID).toBe("sess_new")
+    expect(prompted.text).toContain("Continuing work from session sess_source")
+    expect(prompted.text).toContain("@src/files.ts @README.md")
+    expect(prompted.text).toContain("Continue implementation")
+    expect(result).toMatchObject({ content: expect.stringContaining("sess_new") })
   })
 
-  test("builds a draft when no files are supplied", async () => {
-    const appendedPrompts: unknown[] = []
-    const client = {
-      tui: {
-        async executeCommand() {},
-        async appendPrompt(input: unknown) {
-          appendedPrompts.push(input)
+  test("builds a prompt when no files are supplied", async () => {
+    const prompts: unknown[] = []
+    const ctx = createCtx({
+      session: {
+        async create() {
+          return { id: "sess_new" }
         },
-        async showToast() {},
+        async prompt(input: unknown) {
+          prompts.push(input)
+        },
       },
-    } as unknown as OpencodeClient
+    })
 
-    await HandoffSession(client).execute(
+    await createHandoffSessionTool(ctx).execute(
       { prompt: "Continue implementation" },
-      createToolContext("sess_source")
+      { sessionID: "sess_source" } as never
     )
 
-    expect(appendedPrompts).toEqual([
+    expect(prompts).toEqual([
       {
-        body: {
-          text: [
-            "Continuing work from session sess_source. When you lack specific information you can use read_session to get it.",
-            "",
-            "Continue implementation",
-          ].join("\n"),
-        },
+        sessionID: "sess_new",
+        text: [
+          "Continuing work from session sess_source. When you lack specific information you can use read_session to get it.",
+          "",
+          "Continue implementation",
+        ].join("\n"),
       },
     ])
   })
@@ -89,106 +82,114 @@ describe("HandoffSession", () => {
 describe("ReadSession", () => {
   test("formats visible conversation content", async () => {
     const requests: unknown[] = []
-    const client = {
+    const ctx = createCtx({
       session: {
-        async messages(input: unknown) {
+        async context(input: unknown) {
           requests.push(input)
-          return {
-            data: [
-              {
-                info: { role: "user" },
-                parts: [
-                  { type: "text", text: "hello" },
-                  { type: "text", text: "hidden", ignored: true },
-                  { type: "file", filename: "notes.txt" },
-                ],
-              },
-              {
-                info: { role: "assistant" },
-                parts: [
-                  { type: "text", text: "done" },
-                  {
-                    type: "tool",
-                    tool: "read",
-                    state: { status: "completed", title: "Read file" },
-                  },
-                  {
-                    type: "tool",
-                    tool: "write",
-                    state: { status: "running", title: "Writing" },
-                  },
-                ],
-              },
-            ],
-          }
+          return [
+            {
+              type: "user",
+              text: "hello",
+              files: [{ uri: "file:///notes.txt", name: "notes.txt" }],
+            },
+            {
+              type: "assistant",
+              content: [
+                { type: "text", text: "done" },
+                { type: "tool", name: "read", state: { status: "completed" } },
+                { type: "tool", name: "write", state: { status: "running" } },
+              ],
+            },
+          ]
         },
       },
-    } as unknown as OpencodeClient
+    })
 
-    const result = await ReadSession(client).execute(
-      { sessionID: "sess_old", limit: 2 },
-      createToolContext("sess_current")
-    )
+    const result = await createReadSessionTool(ctx).execute({
+      sessionID: "sess_old",
+      limit: 2,
+    })
 
-    expect(requests).toEqual([
-      { path: { id: "sess_old" }, query: { limit: 2 } },
-    ])
-    expect(result).toBe(
-      [
+    expect(requests).toEqual([{ sessionID: "sess_old" }])
+    expect(result).toEqual({
+      content: [
         "## User",
         "hello",
         "[Attached: notes.txt]",
         "",
         "## Assistant",
         "done",
-        "[Tool: read] Read file",
+        "[Tool: read] completed",
+        "[Tool: write] running",
         "",
         "(Showing 2 most recent messages. Use a higher 'limit' to see more.)",
-      ].join("\n")
-    )
+      ].join("\n"),
+    })
   })
 
-  test("uses the default limit and handles an empty session", async () => {
+  test("applies the limit client-side and handles an empty session", async () => {
     const requests: unknown[] = []
-    const client = {
+    const ctx = createCtx({
       session: {
-        async messages(input: unknown) {
+        async context(input: unknown) {
           requests.push(input)
-          return { data: [] }
+          return []
         },
       },
-    } as unknown as OpencodeClient
+    })
 
-    const result = await ReadSession(client).execute(
-      { sessionID: "sess_empty" },
-      createToolContext("sess_current")
-    )
+    const result = await createReadSessionTool(ctx).execute({
+      sessionID: "sess_empty",
+    })
 
-    expect(requests).toEqual([
-      { path: { id: "sess_empty" }, query: { limit: 100 } },
-    ])
-    expect(result).toBe("Session has no messages or does not exist.")
+    expect(requests).toEqual([{ sessionID: "sess_empty" }])
+    expect(result).toEqual({
+      content: "Session has no messages or does not exist.",
+    })
   })
 
-  test("caps the limit and turns client errors into useful output", async () => {
-    const requests: unknown[] = []
-    const client = {
+  test("keeps the most recent messages and turns client errors into useful output", async () => {
+    const ctx = createCtx({
       session: {
-        async messages(input: unknown) {
-          requests.push(input)
+        async context() {
           throw new Error("offline")
         },
       },
-    } as unknown as OpencodeClient
+    })
 
-    const result = await ReadSession(client).execute(
-      { sessionID: "sess_old", limit: 900 },
-      createToolContext("sess_current")
-    )
+    const failing = await createReadSessionTool(ctx).execute({
+      sessionID: "sess_old",
+      limit: 900,
+    })
+    expect(failing).toEqual({
+      content: "Could not read session sess_old: offline",
+    })
 
-    expect(requests).toEqual([
-      { path: { id: "sess_old" }, query: { limit: 500 } },
-    ])
-    expect(result).toBe("Could not read session sess_old: offline")
+    const pagingCtx = createCtx({
+      session: {
+        async context() {
+          return [
+            { type: "user", text: "one" },
+            { type: "user", text: "two" },
+            { type: "user", text: "three" },
+          ]
+        },
+      },
+    })
+    const paged = await createReadSessionTool(pagingCtx).execute({
+      sessionID: "sess_old",
+      limit: 2,
+    })
+    expect(paged).toEqual({
+      content: [
+        "## User",
+        "two",
+        "",
+        "## User",
+        "three",
+        "",
+        "(Showing 2 most recent messages. Use a higher 'limit' to see more.)",
+      ].join("\n"),
+    })
   })
 })

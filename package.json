@@ -1,6 +1,6 @@
 {
   "name": "opencode-handoff",
-  "version": "0.5.0",
+  "version": "0.6.0",
   "type": "module",
   "description": "Create focused handoff prompts for continuing work in new OpenCode sessions",
   "author": "Josh Thomas <josh@joshthomas.dev>",
@@ -22,9 +22,7 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
-    "@opencode-ai/plugin": "^1.2.15",
-    "@opencode-ai/sdk": "^1.2.15",
-    "zod": "^4.1.13"
+    "@opencode/plugin": "^2.0.22"
   },
   "devDependencies": {
     "@types/bun": "latest",
