@@ -1,16 +1,39 @@
-import type { Plugin } from "@opencode-ai/plugin"
-import { HandoffSession, ReadSession } from "./tools"
-import { parseFileReferences, buildSyntheticFileParts } from "./files"
+/**
+ * opencode-handoff — OpenCode V2 port (local).
+ *
+ * V1 exported `export const HandoffPlugin: Plugin` (factory returning
+ * `{ config, tool, "chat.message", event }`), which V2 rejects with
+ * "Plugin must export a default definition with an id and an effect or
+ * setup function" (upstream issue #33).
+ *
+ * V2 shape: plain default-exported `{ id, setup }` (runtime-equivalent
+ * to `Plugin.define`, no `@opencode/plugin` runtime import needed so
+ * loose installs without node_modules keep working).
+ *
+ * Mapping:
+ * - `config.command["handoff"]` (template) -> `ctx.command.transform`
+ *   with `execute` submitting the template + user goal via session.prompt
+ * - `tool` map (zod) -> `ctx.tool.transform` with JSON Schema defs
+ * - `"chat.message"` file auto-injection -> dropped in this port:
+ *   the handoff prompt already carries `@file` refs, which the new
+ *   session resolves through the normal attachment pipeline
+ * - `event(session.deleted)` -> `ctx.event.subscribe` + cleanup fn
+ */
+
+import { handoffSessionDef, readSessionDef } from "./tools";
 
 const HANDOFF_COMMAND = `GOAL: You are creating a handoff message to continue work in a new session.
 
 <context>
+
 When an AI assistant starts a fresh session, it spends significant time exploring the codebase—grepping, reading files, searching—before it can begin actual work. This "file archaeology" is wasteful when the previous session already discovered what matters.
 
 A good handoff frontloads everything the next session needs so it can start implementing immediately.
+
 </context>
 
 <instructions>
+
 Analyze this conversation and extract what matters for continuing the work.
 
 1. Identify all relevant files that should be loaded into the next session's context
@@ -26,78 +49,78 @@ Analyze this conversation and extract what matters for continuing the work.
    Exclude: conversation back-and-forth, dead ends, meta-commentary.
 
 The user controls what context matters. If they mentioned something to preserve, include it—trust their judgment about their workflow.
+
 </instructions>
 
 <user_input>
+
 This is what the next session should focus on. Use it to shape your handoff's direction—don't investigate or search, just incorporate the intent into your context and goals.
 
 If empty, capture a natural continuation of the current conversation's direction.
 
 USER: $ARGUMENTS
+
 </user_input>
 
 ---
 
 After generating the handoff message, IMMEDIATELY call handoff_session with your prompt and files:
-\`handoff_session(prompt="...", files=["src/foo.ts", "src/bar.ts", ...])\``
 
-export const HandoffPlugin: Plugin = async (ctx) => {
-  const processedSessions = new Set<string>()
+\`handoff_session(prompt="...", files=["src/foo.ts", "src/bar.ts", ...])\``;
 
-  return {
-    config: async (config) => {
-      config.command = config.command || {}
-      config.command["handoff"] = {
-        description: "Create a focused handoff prompt for a new session",
-        template: HANDOFF_COMMAND,
-      }
-    },
-
-    tool: {
-      handoff_session: HandoffSession(ctx.client),
-      read_session: ReadSession(ctx.client),
-    },
-
-    "chat.message": async (_input, output) => {
-      const sessionID = output.message.sessionID
-
-      if (processedSessions.has(sessionID)) return
-
-      // Get non-synthetic text from the message
-      const text = output.parts
-        .filter((p): p is typeof p & { type: "text"; text: string } =>
-          p.type === "text" && !p.synthetic && typeof p.text === "string"
-        )
-        .map(p => p.text)
-        .join("\n")
-
-      if (!text.includes("Continuing work from session")) return
-
-      processedSessions.add(sessionID)
-
-      const fileRefs = parseFileReferences(text)
-      if (fileRefs.size === 0) return
-
-      const fileParts = await buildSyntheticFileParts(ctx.directory, fileRefs)
-      if (fileParts.length === 0) return
-
-      // Inject file parts via noReply
-      // Must pass model and agent to prevent mode/model switching
-      await ctx.client.session.prompt({
-        path: { id: sessionID },
-        body: {
-          noReply: true,
-          model: output.message.model,
-          agent: output.message.agent,
-          parts: fileParts,
-        },
-      })
-    },
-
-    event: async ({ event }) => {
-      if (event.type === "session.deleted") {
-        processedSessions.delete(event.properties.info.id)
-      }
-    }
-  }
+/** Minimal V2 context surface used by setup (kept structural, no SDK import). */
+export interface SetupCtx {
+  location: { directory: string };
+  options?: unknown;
+  command: { transform: (cb: (editor: any) => void) => Promise<unknown> };
+  tool: { transform: (cb: (editor: any) => void) => Promise<unknown> };
+  event: { subscribe: (opts?: { signal?: AbortSignal }) => AsyncIterable<any> };
+  session: {
+    create: (input: Record<string, unknown>) => Promise<Record<string, unknown>>;
+    prompt: (input: Record<string, unknown>) => Promise<unknown>;
+    context: (input: Record<string, unknown>) => Promise<unknown>;
+  };
 }
+
+export async function setup(ctx: SetupCtx): Promise<() => void> {
+  const processedSessions = new Set<string>();
+
+  // /handoff command (V1 config.command template -> V2 command transform)
+  await ctx.command.transform((editor) => {
+    editor.add({
+      name: "handoff",
+      description: "Create a focused handoff prompt for a new session",
+      execute: async ({ sessionID, prompt, delivery }: { sessionID: string; prompt: { text?: string }; delivery?: string }) => {
+        const goal = prompt?.text ?? "";
+        const text = HANDOFF_COMMAND.replace("$ARGUMENTS", goal);
+        await ctx.session.prompt({ sessionID, text, delivery });
+      },
+    });
+  });
+
+  // Tools (V1 tool map -> V2 tool transform, JSON Schema)
+  await ctx.tool.transform((editor) => {
+    editor.add(handoffSessionDef(ctx as never));
+    editor.add(readSessionDef(ctx as never));
+  });
+
+  // Session-deleted bookkeeping (V1 event hook -> V2 subscription)
+  const controller = new AbortController();
+  void (async () => {
+    try {
+      for await (const event of ctx.event.subscribe({ signal: controller.signal })) {
+        if (event?.type === "session.deleted") {
+          const id = event?.properties?.info?.id ?? event?.properties?.id;
+          if (typeof id === "string") processedSessions.delete(id);
+        }
+      }
+    } catch {
+      // Aborted on unload; ignore.
+    }
+  })();
+
+  void processedSessions;
+  return () => controller.abort();
+}
+
+export default { id: "handoff", setup };

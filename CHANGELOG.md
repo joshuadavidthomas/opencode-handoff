@@ -18,6 +18,21 @@ and this project attempts to adhere to [Semantic Versioning](https://semver.org/
 
 ## [Unreleased]
 
+## [0.6.0]
+
+### Changed
+
+- Migrated plugin to the OpenCode v2 plugin API (`Plugin.define({ id, setup })`, JSON Schema tools, `ctx.command`/`ctx.tool` transforms), dropping the `@opencode-ai/plugin`, `@opencode-ai/sdk`, and `zod` runtime dependencies
+- Minimum OpenCode version requirement is now v2
+
+### Removed
+
+- V1 `HandoffPlugin` named export, TUI toast, and `chat.message` auto-injection (the handoff prompt already carries `@file` references)
+
+### Fixed
+
+- Plugin now loads on OpenCode v2 instead of failing with "Plugin must export a default definition" ([#33](https://github.com/joshuadavidthomas/opencode-handoff/issues/33), [#31](https://github.com/joshuadavidthomas/opencode-handoff/issues/31))
+
 ## [0.5.0]
 
 ### Changed 

@@ -13,7 +13,7 @@ Inspired by Amp's handoff command - see their [post](https://ampcode.com/news/ha
 
 ## Requirements
 
-- [OpenCode](https://opencode.ai/) v1.2.15 or later
+- [OpenCode](https://opencode.ai/) v2 or later
 
 ## Installation
 

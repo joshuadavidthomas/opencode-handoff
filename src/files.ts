@@ -7,8 +7,14 @@
 
 import * as path from "node:path"
 import * as fs from "node:fs/promises"
-import type { TextPartInput } from "@opencode-ai/sdk"
 import { isBinaryFile, formatFileContent } from "./vendor"
+
+/** Minimal synthetic text part shape (kept local so loose installs need no SDK). */
+export interface SyntheticTextPart {
+  type: "text"
+  synthetic: boolean
+  text: string
+}
 
 /**
  * File reference regex matching OpenCode's internal pattern.
@@ -37,10 +43,6 @@ export function parseFileReferences(text: string): Set<string> {
 /**
  * Build synthetic text parts matching OpenCode's Read tool output.
  *
- * Creates two synthetic text parts for each file:
- * 1. Header describing the Read tool call
- * 2. Formatted file content with line numbers
- *
  * @param directory - Project directory to resolve relative paths against
  * @param refs - Set of file path references to check
  * @returns Array of synthetic text parts (non-existent and binary files are skipped)
@@ -48,8 +50,8 @@ export function parseFileReferences(text: string): Set<string> {
 export async function buildSyntheticFileParts(
   directory: string,
   refs: Set<string>
-): Promise<TextPartInput[]> {
-  const parts: TextPartInput[] = []
+): Promise<SyntheticTextPart[]> {
+  const parts: SyntheticTextPart[] = []
 
   for (const ref of refs) {
     const filepath = path.resolve(directory, ref)
