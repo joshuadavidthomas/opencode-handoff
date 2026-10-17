@@ -1,0 +1,28 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+cd "$(dirname "${BASH_SOURCE[0]}")/.."
+
+step() {
+  local name="$1"
+  shift
+  local start=$SECONDS
+  echo "==> $name"
+  "$@"
+  echo "==> $name done in $((SECONDS - start))s"
+}
+
+# The orb base image ships bun; fall back to the official installer if it is missing.
+if ! command -v bun >/dev/null 2>&1; then
+  if [ ! -x "$HOME/.bun/bin/bun" ]; then
+    step "install bun" bash -c 'curl -fsSL https://bun.sh/install | bash'
+  fi
+  marker="# opencode-handoff bun path"
+  if ! grep -Fqx "$marker" "$HOME/.bash_profile" 2>/dev/null; then
+    printf '\n%s\nexport PATH="$HOME/.bun/bin:$PATH"\n' "$marker" >> "$HOME/.bash_profile"
+  fi
+  export PATH="$HOME/.bun/bin:$PATH"
+fi
+echo "bun $(bun --version)"
+
+step "bun install" bun install --frozen-lockfile
