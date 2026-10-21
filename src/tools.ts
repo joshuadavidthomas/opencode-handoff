@@ -22,8 +22,8 @@ export interface HandoffDraft {
 export type HandoffStarted = { sessionID: string; files: number }
 export type HandoffOutcome = HandoffStarted | { cancelled: true }
 
-/** Offers a draft for review and resolves with the user's decision, or undefined if no TUI claimed it. */
-export type ReviewDraft = (draft: HandoffDraft, signal: AbortSignal) => Promise<HandoffOutcome | undefined>
+/** Offers a draft for review and resolves with the user's decision, or with the session started without review if no TUI claimed it. */
+export type ReviewDraft = (draft: HandoffDraft, signal: AbortSignal) => Promise<HandoffOutcome>
 
 /**
  * Start the handoff session with the source session's agent and model,
@@ -64,7 +64,7 @@ export const HandoffSession = (ctx: Context, review: ReviewDraft): ToolInfo => (
     const text = [sessionReference, fileRefs, args.prompt].filter(Boolean).join("\n\n")
     const draft = { sourceSessionID: context.sessionID, agent: context.agent, text }
 
-    const outcome = (await review(draft, context.signal)) ?? (await startHandoff(ctx, draft))
+    const outcome = await review(draft, context.signal)
     if ("cancelled" in outcome) return { content: "The user cancelled the handoff." }
     return { content: `Started handoff session ${outcome.sessionID} with ${outcome.files} attached file(s).` }
   },

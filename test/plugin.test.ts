@@ -181,13 +181,14 @@ describe("HandoffPlugin", () => {
 
   test("starts the handoff without review when no TUI claims the draft", async () => {
     jest.useFakeTimers()
-    const { handlers, prompts, handoff } = await setupPlugin()
+    const { handlers, prompts, started, handoff } = await setupPlugin()
     const { result, draft } = await handoff()
 
     jest.advanceTimersByTime(CLAIM_TIMEOUT_MS)
 
     expect((await result).content).toBe("Started handoff session sess_new with 0 attached file(s).")
     expect(prompts).toEqual([{ sessionID: "sess_new", text: draft.text, files: [] } as never])
+    expect(started).toEqual([{ sessionID: "sess_new", sourceSessionID: "sess_source" }])
     expect(await handlers.claim!({ draftID: draft.draftID }, RPC_CONTEXT)).toEqual({ claimed: false })
   })
 })

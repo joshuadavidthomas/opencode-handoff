@@ -91,10 +91,10 @@ export default Plugin.define({
 
     function review(draft: HandoffDraft, signal: AbortSignal) {
       const draftID = crypto.randomUUID()
-      return new Promise<HandoffOutcome | undefined>((resolve, reject) => {
+      return new Promise<HandoffOutcome>((resolve, reject) => {
         const timer = setTimeout(() => {
           drafts.delete(draftID)
-          resolve(undefined)
+          resolve(startWithoutReview(draft))
         }, CLAIM_TIMEOUT_MS)
         drafts.set(draftID, { draft, claim: () => clearTimeout(timer), settle: resolve, fail: reject })
         // Interrupting the source session abandons the draft; a later send from the dialog fails as not found.

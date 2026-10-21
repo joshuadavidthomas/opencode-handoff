@@ -5,8 +5,9 @@ import { Handoff } from "./rpc"
 
 /**
  * Shows a handoff draft for editing before it is sent, and switches to a
- * handoff session started without review. Only a TUI that has the source
- * session open reacts.
+ * handoff session started without review. Only a TUI showing the source
+ * session claims a draft; TUIs on the same machine share tabs, so a tab is
+ * no sign that this client ran the handoff.
  */
 export default Plugin.define({
   id: "opencode-handoff-tui",
@@ -37,7 +38,7 @@ export default Plugin.define({
       }
       // Each location runs its own server plugin instance; reply to the one that sent the draft.
       const location = event.location
-      if (!showing(sourceSessionID) && !open(sourceSessionID)) return
+      if (!showing(sourceSessionID)) return
       const { claimed } = (await handoff.claim({ draftID }, { location })) as { claimed: boolean }
       if (!claimed) return
 

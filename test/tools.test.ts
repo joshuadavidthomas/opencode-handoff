@@ -4,7 +4,7 @@ import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { pathToFileURL } from "node:url"
 import type { Plugin } from "@opencode/plugin"
-import { HandoffSession, ReadSession } from "../src/tools"
+import { HandoffSession, ReadSession, startHandoff } from "../src/tools"
 
 type Context = Plugin.Context
 
@@ -53,7 +53,7 @@ describe("HandoffSession", () => {
         "Continue in @src/inline.ts using @note.txt",
       ].join("\n\n")
 
-      const result = await HandoffSession(ctx, async () => undefined).execute(
+      const result = await HandoffSession(ctx, (draft) => startHandoff(ctx, draft)).execute(
         {
           prompt: "Continue in @src/inline.ts using @note.txt",
           files: ["note.txt", "@missing.md", "image.bin"],
