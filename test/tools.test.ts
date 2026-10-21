@@ -54,7 +54,9 @@ describe("HandoffSession", () => {
       expect(promptCall.text).toContain(
         "Continuing work from session sess_source"
       )
-      expect(promptCall.text).toContain("@note.txt @README.md")
+      // Files ride as attachments only. Naming them again as @refs in the text
+      // duplicated the content and tripped the new session's compaction.
+      expect(promptCall.text).not.toContain("@")
       expect(promptCall.text).toContain("Continue implementation")
       // README.md does not exist in the temp directory and is skipped
       expect(promptCall.files).toEqual([

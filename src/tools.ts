@@ -57,15 +57,12 @@ export const HandoffSession = (ctx: Context) => {
       const input = rawInput as HandoffSessionInput
 
       const sessionReference = `Continuing work from session ${context.sessionID}. When you lack specific information you can use read_session to get it.`
-      const fileRefs = input.files?.length
-        ? input.files.map((file) => `@${file.replace(/^@/, "")}`).join(" ")
-        : ""
-      const fullPrompt = fileRefs
-        ? `${sessionReference}\n\n${fileRefs}\n\n${input.prompt}`
-        : `${sessionReference}\n\n${input.prompt}`
+      const fullPrompt = `${sessionReference}\n\n${input.prompt}`
 
       // Attach referenced files to the new session's prompt so they load
-      // through OpenCode's supported attachment path.
+      // through OpenCode's supported attachment path. The prompt text does not
+      // repeat them as @refs: the attachments already carry the content, and
+      // naming the same files twice tripped the new session's compaction.
       const files = input.files?.length
         ? await buildFileAttachments(
             ctx.location.directory,
