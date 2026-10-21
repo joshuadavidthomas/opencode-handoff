@@ -85,11 +85,10 @@ describe("HandoffTui", () => {
     expect(calls.at(-1)).toEqual({ cancel: { draftID: "draft_1" }, location: LOCATION })
   })
 
-  test("a client with the source session in a background tab also claims it", async () => {
+  test("a client with the source session only in a background tab leaves the draft alone", async () => {
     const { calls } = await setupTui({ route: { type: "home" }, tabs: [{ sessionID: "sess_source" }] })
 
-    expect(calls[0]).toEqual({ claim: { draftID: "draft_1" }, location: LOCATION })
-    expect(calls).toContain("show")
+    expect(calls).toEqual([])
   })
 
   test("does not open the editor when another client claimed the draft first", async () => {

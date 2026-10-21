@@ -52,7 +52,7 @@ OpenCode fetches unpinned plugins from npm on each startup; pinned versions are 
 
 The AI analyzes the conversation, extracts key decisions and relevant files, generates a focused prompt, and opens it for review before starting a new session.
 
-Every `@path` in the sent text is attached, so editing the references changes the attached files. Review needs the terminal UI with the source session open; otherwise (for example with `opencode run` or the desktop app) the session starts without review.
+Every `@path` in the sent text is attached, so editing the references changes the attached files. Review needs the terminal UI showing the source session; otherwise (for example with `opencode run` or the desktop app) the session starts without review.
 
 To always skip review, set the `review` option to `false`:
 
