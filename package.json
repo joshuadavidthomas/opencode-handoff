@@ -15,20 +15,38 @@
     "agent",
     "ai"
   ],
-  "main": "src/plugin.ts",
-  "files": ["src", "README.md"],
+  "main": "./dist/index.js",
+  "exports": {
+    ".": "./dist/index.js",
+    "./server": "./dist/index.js",
+    "./tui": "./dist/tui.js"
+  },
+  "files": ["dist", "README.md"],
   "scripts": {
+    "build": "bun build ./index.ts ./tui.ts --outdir ./dist --target node --format esm --packages external",
+    "prepack": "bun run build",
     "test": "bun test",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
-    "@opencode-ai/plugin": "^1.2.15",
-    "@opencode-ai/sdk": "^1.2.15",
-    "zod": "^4.1.13"
+    "@opencode/plugin": "^2.1.2"
+  },
+  "peerDependencies": {
+    "@opentui/core": ">=0.6.6",
+    "@opentui/solid": ">=0.6.6",
+    "solid-js": ">=1.9.0"
+  },
+  "peerDependenciesMeta": {
+    "@opentui/core": { "optional": true },
+    "@opentui/solid": { "optional": true },
+    "solid-js": { "optional": true }
   },
   "devDependencies": {
+    "@opentui/core": "^0.6.6",
+    "@opentui/solid": "^0.6.6",
     "@types/bun": "latest",
     "@types/node": "^22.0.0",
+    "solid-js": "^1.9.0",
     "typescript": "~5.9.3"
   },
   "engines": {

@@ -1,6 +1,9 @@
-import type { Plugin } from "@opencode-ai/plugin"
-import { HandoffSession, ReadSession } from "./tools"
-import { parseFileReferences, buildSyntheticFileParts } from "./files"
+import { Plugin } from "@opencode/plugin"
+import { Handoff } from "./rpc"
+import { HandoffSession, ReadSession, startHandoff, type HandoffDraft, type HandoffOutcome } from "./tools"
+
+/** How long a TUI has to claim a draft before the handoff starts without review. */
+export const CLAIM_TIMEOUT_MS = 3000
 
 const HANDOFF_COMMAND = `GOAL: You are creating a handoff message to continue work in a new session.
 
@@ -41,63 +44,91 @@ USER: $ARGUMENTS
 After generating the handoff message, IMMEDIATELY call handoff_session with your prompt and files:
 \`handoff_session(prompt="...", files=["src/foo.ts", "src/bar.ts", ...])\``
 
-export const HandoffPlugin: Plugin = async (ctx) => {
-  const processedSessions = new Set<string>()
-
-  return {
-    config: async (config) => {
-      config.command = config.command || {}
-      config.command["handoff"] = {
-        description: "Create a focused handoff prompt for a new session",
-        template: HANDOFF_COMMAND,
+export default Plugin.define({
+  id: "opencode-handoff",
+  async setup(ctx) {
+    // `claim` is set while the draft is waiting for a TUI to claim it. `settle`
+    // and `fail` finish the handoff_session call that is waiting on the draft.
+    const drafts = new Map<
+      string,
+      {
+        draft: HandoffDraft
+        claim?: () => void
+        settle: (outcome: HandoffOutcome) => void
+        fail: (error: unknown) => void
       }
-    },
+    >()
 
-    tool: {
-      handoff_session: HandoffSession(ctx.client),
-      read_session: ReadSession(ctx.client),
-    },
+    const rpc = await ctx.rpc.register(Handoff, {
+      async claim(input) {
+        const pending = drafts.get((input as { draftID: string }).draftID)
+        if (!pending?.claim) return { claimed: false }
+        pending.claim()
+        pending.claim = undefined
+        return { claimed: true }
+      },
+      async start(input, context) {
+        const { draftID, text } = input as { draftID: string; text: string }
+        const pending = drafts.get(draftID)
+        if (!pending || pending.claim) return context.error("not_found", "Handoff draft not found", { draftID })
+        drafts.delete(draftID)
+        try {
+          const outcome = await startHandoff(ctx, { ...pending.draft, text })
+          pending.settle(outcome)
+          return { sessionID: outcome.sessionID }
+        } catch (error) {
+          pending.fail(error)
+          throw error
+        }
+      },
+      async cancel(input) {
+        const draftID = (input as { draftID: string }).draftID
+        drafts.get(draftID)?.settle({ cancelled: true })
+        drafts.delete(draftID)
+        return {}
+      },
+    })
 
-    "chat.message": async (_input, output) => {
-      const sessionID = output.message.sessionID
-
-      if (processedSessions.has(sessionID)) return
-
-      // Get non-synthetic text from the message
-      const text = output.parts
-        .filter((p): p is typeof p & { type: "text"; text: string } =>
-          p.type === "text" && !p.synthetic && typeof p.text === "string"
+    function review(draft: HandoffDraft, signal: AbortSignal) {
+      const draftID = crypto.randomUUID()
+      return new Promise<HandoffOutcome | undefined>((resolve, reject) => {
+        const timer = setTimeout(() => {
+          drafts.delete(draftID)
+          resolve(undefined)
+        }, CLAIM_TIMEOUT_MS)
+        drafts.set(draftID, { draft, claim: () => clearTimeout(timer), settle: resolve, fail: reject })
+        // Interrupting the source session abandons the draft; a later send from the dialog fails as not found.
+        signal.addEventListener(
+          "abort",
+          () => {
+            clearTimeout(timer)
+            drafts.delete(draftID)
+            resolve({ cancelled: true })
+          },
+          { once: true }
         )
-        .map(p => p.text)
-        .join("\n")
+        rpc.events.emit("draft", { draftID, sourceSessionID: draft.sourceSessionID, text: draft.text }).catch(reject)
+      })
+    }
 
-      if (!text.includes("Continuing work from session")) return
-
-      processedSessions.add(sessionID)
-
-      const fileRefs = parseFileReferences(text)
-      if (fileRefs.size === 0) return
-
-      const fileParts = await buildSyntheticFileParts(ctx.directory, fileRefs)
-      if (fileParts.length === 0) return
-
-      // Inject file parts via noReply
-      // Must pass model and agent to prevent mode/model switching
-      await ctx.client.session.prompt({
-        path: { id: sessionID },
-        body: {
-          noReply: true,
-          model: output.message.model,
-          agent: output.message.agent,
-          parts: fileParts,
+    await ctx.command.transform((editor) => {
+      editor.add({
+        name: "handoff",
+        description: "Create a focused handoff prompt for a new session",
+        async execute({ sessionID, prompt, delivery }) {
+          await ctx.session.prompt({
+            ...prompt,
+            sessionID,
+            delivery,
+            text: HANDOFF_COMMAND.replaceAll("$ARGUMENTS", () => prompt.text),
+          })
         },
       })
-    },
+    })
 
-    event: async ({ event }) => {
-      if (event.type === "session.deleted") {
-        processedSessions.delete(event.properties.info.id)
-      }
-    }
-  }
-}
+    await ctx.tool.transform((editor) => {
+      editor.add(HandoffSession(ctx, review))
+      editor.add(ReadSession(ctx))
+    })
+  },
+})

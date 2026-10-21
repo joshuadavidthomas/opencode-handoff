@@ -1,20 +1,25 @@
 /**
- * File reference parsing and building for handoff sessions.
+ * File reference handling for handoff sessions.
  *
- * Handles extraction of @file references from handoff prompts and
- * building synthetic text parts that match OpenCode's Read tool output format.
+ * Turns the files a handoff names into prompt attachments, which OpenCode
+ * reads and loads into the new session's context.
  */
 
 import * as path from "node:path"
 import * as fs from "node:fs/promises"
-import type { TextPartInput } from "@opencode-ai/sdk"
-import { isBinaryFile, formatFileContent } from "./vendor"
+import { pathToFileURL } from "node:url"
+import { isBinaryFile } from "./vendor"
 
 /**
  * File reference regex matching OpenCode's internal pattern.
  * Matches @file references like @src/plugin.ts
  */
 export const FILE_REGEX = /(?<![\w`])@(\.?[^\s`,.]*(?:\.[^\s`,.]+)*)/g
+
+export interface FileAttachment {
+  readonly uri: string
+  readonly name: string
+}
 
 /**
  * Parse @file references from text.
@@ -35,53 +40,33 @@ export function parseFileReferences(text: string): Set<string> {
 }
 
 /**
- * Build synthetic text parts matching OpenCode's Read tool output.
- *
- * Creates two synthetic text parts for each file:
- * 1. Header describing the Read tool call
- * 2. Formatted file content with line numbers
+ * Build prompt file attachments for referenced files.
  *
  * @param directory - Project directory to resolve relative paths against
- * @param refs - Set of file path references to check
- * @returns Array of synthetic text parts (non-existent and binary files are skipped)
+ * @param refs - File path references, with or without a leading @
+ * @returns Attachments for readable text files (missing, duplicate, and binary files are skipped)
  */
-export async function buildSyntheticFileParts(
+export async function buildFileAttachments(
   directory: string,
-  refs: Set<string>
-): Promise<TextPartInput[]> {
-  const parts: TextPartInput[] = []
+  refs: Iterable<string>
+): Promise<FileAttachment[]> {
+  const attachments = new Map<string, FileAttachment>()
 
   for (const ref of refs) {
-    const filepath = path.resolve(directory, ref)
+    const filepath = path.resolve(directory, ref.replace(/^@/, ""))
 
     try {
-      // Check if file exists
       const stats = await fs.stat(filepath)
       if (!stats.isFile()) continue
 
-      // Skip binary files
       if (await isBinaryFile(filepath)) continue
 
-      // Read file content
-      const content = await fs.readFile(filepath, "utf-8")
-
-      // Create header part (matching OpenCode's prompt.ts:820 format)
-      parts.push({
-        type: "text",
-        synthetic: true,
-        text: `Called the Read tool with the following input: ${JSON.stringify({ filePath: filepath })}`
-      })
-
-      // Create content part (matching OpenCode's ReadTool format)
-      parts.push({
-        type: "text",
-        synthetic: true,
-        text: formatFileContent(filepath, content)
-      })
+      const uri = pathToFileURL(filepath).href
+      attachments.set(uri, { uri, name: path.relative(directory, filepath) })
     } catch {
-      // Skip silently if file can't be read
+      // Skip silently if the reference doesn't resolve to a readable file
     }
   }
 
-  return parts
+  return [...attachments.values()]
 }
