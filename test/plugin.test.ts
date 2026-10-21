@@ -12,14 +12,16 @@ const RPC_CONTEXT = {
   error: (type: string, message: string, data: unknown) => ({ type, message, data }),
 }
 
-async function setupPlugin() {
+async function setupPlugin(options: Record<string, unknown> = {}) {
   const commands: Record<string, CommandDefinition> = {}
   const tools: Record<string, ToolInfo> = {}
   const handlers: Record<string, Handler> = {}
   const drafts: Array<{ draftID: string; sourceSessionID: string; text: string }> = []
+  const started: unknown[] = []
   const prompts: Array<{ sessionID: string; text: string }> = []
   const ctx = {
     location: { directory: "/tmp/project" },
+    options,
     rpc: {
       async register(definition: { id: string }, registered: Record<string, Handler>) {
         expect(definition.id).toBe("opencode-handoff")
@@ -27,8 +29,9 @@ async function setupPlugin() {
         return {
           events: {
             async emit(name: string, data: never) {
-              expect(name).toBe("draft")
-              drafts.push(data)
+              if (name === "draft") drafts.push(data)
+              else if (name === "started") started.push(data)
+              else throw new Error(`unexpected event ${name}`)
             },
           },
         }
@@ -72,7 +75,7 @@ async function setupPlugin() {
     return { result, draft: drafts.at(-1)!, abort, done: () => done }
   }
 
-  return { commands, tools, handlers, prompts, handoff }
+  return { commands, tools, handlers, prompts, drafts, started, handoff }
 }
 
 afterEach(() => {
@@ -160,6 +163,20 @@ describe("HandoffPlugin", () => {
       type: "not_found",
     })
     expect(prompts).toEqual([])
+  })
+
+  test("with review off, starts the session right away and tells the TUI", async () => {
+    const { tools, prompts, drafts, started } = await setupPlugin({ review: false })
+
+    const result = await tools.handoff_session!.execute(
+      { prompt: "Continue the work" },
+      { sessionID: "sess_source", agent: "plan", signal: new AbortController().signal } as never
+    )
+
+    expect(result.content).toBe("Started handoff session sess_new with 0 attached file(s).")
+    expect(drafts).toEqual([])
+    expect(prompts).toHaveLength(1)
+    expect(started).toEqual([{ sessionID: "sess_new", sourceSessionID: "sess_source" }])
   })
 
   test("starts the handoff without review when no TUI claims the draft", async () => {

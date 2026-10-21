@@ -12,7 +12,9 @@ const DraftID = {
  *
  * handoff_session announces a `draft`. A TUI showing the source session
  * `claim`s it, lets the user edit it, then calls `start` or `cancel`. When no
- * TUI claims the draft, the server starts the handoff session itself.
+ * TUI claims the draft, the server starts the handoff session itself. With
+ * review turned off, the server starts it right away and announces `started`
+ * so the TUI can switch to it.
  */
 export const Handoff = Rpc.define({
   id: "opencode-handoff",
@@ -53,6 +55,14 @@ export const Handoff = Rpc.define({
           text: { type: "string" },
         },
         required: ["draftID", "sourceSessionID", "text"],
+        additionalProperties: false,
+      },
+    },
+    started: {
+      schema: {
+        type: "object",
+        properties: { sessionID: { type: "string" }, sourceSessionID: { type: "string" } },
+        required: ["sessionID", "sourceSessionID"],
         additionalProperties: false,
       },
     },

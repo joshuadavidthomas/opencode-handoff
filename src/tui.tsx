@@ -4,15 +4,32 @@ import { Plugin } from "@opencode/plugin/tui"
 import { Handoff } from "./rpc"
 
 /**
- * Shows a handoff draft for editing before it is sent. Only a TUI that has
- * the source session open claims the draft.
+ * Shows a handoff draft for editing before it is sent, and switches to a
+ * handoff session started without review. Only a TUI that has the source
+ * session open reacts.
  */
 export default Plugin.define({
   id: "opencode-handoff-tui",
   setup(context) {
     const handoff = context.client.rpc(Handoff)
 
-    return handoff.events.on("draft", async (event) => {
+    const showing = (sessionID: string) => {
+      const route = context.ui.router.current()
+      return route.type === "session" && route.sessionID === sessionID
+    }
+    const open = (sessionID: string) => context.ui.tabs.list().some((tab) => tab.sessionID === sessionID)
+
+    const stopStarted = handoff.events.on("started", (event) => {
+      const { sessionID, sourceSessionID } = event.data as { sessionID: string; sourceSessionID: string }
+      if (showing(sourceSessionID)) {
+        context.ui.router.navigate({ type: "session", sessionID })
+        context.ui.toast.show({ message: "Handoff started", variant: "success" })
+      } else if (open(sourceSessionID)) {
+        context.ui.toast.show({ message: "Handoff started", variant: "success", sessionID })
+      }
+    })
+
+    const stopDraft = handoff.events.on("draft", async (event) => {
       const { draftID, sourceSessionID, text } = event.data as {
         draftID: string
         sourceSessionID: string
@@ -20,9 +37,7 @@ export default Plugin.define({
       }
       // Each location runs its own server plugin instance; reply to the one that sent the draft.
       const location = event.location
-      const route = context.ui.router.current()
-      const showing = route.type === "session" && route.sessionID === sourceSessionID
-      if (!showing && !context.ui.tabs.list().some((tab) => tab.sessionID === sourceSessionID)) return
+      if (!showing(sourceSessionID) && !open(sourceSessionID)) return
       const { claimed } = (await handoff.claim({ draftID }, { location })) as { claimed: boolean }
       if (!claimed) return
 
@@ -100,5 +115,10 @@ export default Plugin.define({
       )
       context.ui.dialog.set({ size: "xlarge", centered: true })
     })
+
+    return () => {
+      stopStarted()
+      stopDraft()
+    }
   },
 })

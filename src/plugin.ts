@@ -126,8 +126,14 @@ export default Plugin.define({
       })
     })
 
+    async function startWithoutReview(draft: HandoffDraft) {
+      const outcome = await startHandoff(ctx, draft)
+      await rpc.events.emit("started", { sessionID: outcome.sessionID, sourceSessionID: draft.sourceSessionID })
+      return outcome
+    }
+
     await ctx.tool.transform((editor) => {
-      editor.add(HandoffSession(ctx, review))
+      editor.add(HandoffSession(ctx, ctx.options.review === false ? startWithoutReview : review))
       editor.add(ReadSession(ctx))
     })
   },

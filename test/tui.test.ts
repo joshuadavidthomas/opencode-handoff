@@ -4,17 +4,19 @@ import HandoffTui from "../tui"
 
 const LOCATION = { directory: "/tmp/project" }
 
-async function setupTui(options: { route: unknown; tabs?: Array<{ sessionID: string }>; claimed?: boolean }) {
+type Listener = (event: unknown) => Promise<void> | void
+
+function createTui(options: { route: unknown; tabs?: Array<{ sessionID: string }>; claimed?: boolean }) {
   const calls: unknown[] = []
-  let handler: ((event: unknown) => Promise<void>) | undefined
+  const listeners: Record<string, Listener> = {}
   let onClose: (() => void) | undefined
   const context = {
     client: {
       rpc: (definition: { id: string }) => ({
         events: {
-          on(name: string, listener: (event: unknown) => Promise<void>) {
-            expect(`${definition.id}.${name}`).toBe("opencode-handoff.draft")
-            handler = listener
+          on(name: string, listener: Listener) {
+            expect(definition.id).toBe("opencode-handoff")
+            listeners[name] = listener
             return () => {}
           },
         },
@@ -32,7 +34,11 @@ async function setupTui(options: { route: unknown; tabs?: Array<{ sessionID: str
     theme: { surface: () => ({}) },
     renderer: { height: 40 },
     ui: {
-      router: { current: () => options.route },
+      router: {
+        current: () => options.route,
+        navigate: (destination: unknown) => calls.push({ navigate: destination }),
+      },
+      toast: { show: (toast: unknown) => calls.push({ toast }) },
       tabs: { list: () => options.tabs ?? [] },
       dialog: {
         show(_render: unknown, close: () => void) {
@@ -47,11 +53,22 @@ async function setupTui(options: { route: unknown; tabs?: Array<{ sessionID: str
   } as unknown as Plugin.Context
 
   HandoffTui.setup(context)
-  await handler!({
+  return { calls, listeners, close: () => onClose?.() }
+}
+
+async function setupTui(options: Parameters<typeof createTui>[0]) {
+  const tui = createTui(options)
+  await tui.listeners.draft!({
     location: LOCATION,
     data: { draftID: "draft_1", sourceSessionID: "sess_source", text: "Continue" },
   })
-  return { calls, close: () => onClose?.() }
+  return tui
+}
+
+async function started(options: Parameters<typeof createTui>[0]) {
+  const tui = createTui(options)
+  await tui.listeners.started!({ location: LOCATION, data: { sessionID: "sess_new", sourceSessionID: "sess_source" } })
+  return tui.calls
 }
 
 describe("HandoffTui", () => {
@@ -85,5 +102,16 @@ describe("HandoffTui", () => {
     const { calls } = await setupTui({ route: { type: "session", sessionID: "sess_other" }, tabs: [{ sessionID: "sess_other" }] })
 
     expect(calls).toEqual([])
+  })
+
+  test("a handoff started without review switches the client showing the source session", async () => {
+    expect(await started({ route: { type: "session", sessionID: "sess_source" } })).toEqual([
+      { navigate: { type: "session", sessionID: "sess_new" } },
+      { toast: { message: "Handoff started", variant: "success" } },
+    ])
+    expect(await started({ route: { type: "home" }, tabs: [{ sessionID: "sess_source" }] })).toEqual([
+      { toast: { message: "Handoff started", variant: "success", sessionID: "sess_new" } },
+    ])
+    expect(await started({ route: { type: "session", sessionID: "sess_other" } })).toEqual([])
   })
 })

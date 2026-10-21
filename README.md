@@ -54,6 +54,14 @@ The AI analyzes the conversation, extracts key decisions and relevant files, gen
 
 Every `@path` in the sent text is attached, so editing the references changes the attached files. Review needs the terminal UI with the source session open; otherwise (for example with `opencode run` or the desktop app) the session starts without review.
 
+To always skip review, set the `review` option to `false`:
+
+```json
+{
+  "plugins": [{ "package": "opencode-handoff", "options": { "review": false } }]
+}
+```
+
 ### Reading Previous Session Transcripts
 
 When you use `/handoff`, the generated prompt includes a session reference line:
