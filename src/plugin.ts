@@ -1,6 +1,6 @@
-import type { Plugin } from "@opencode-ai/plugin"
+import { Plugin } from "@opencode/plugin"
 import { HandoffSession, ReadSession } from "./tools"
-import { parseFileReferences, buildSyntheticFileParts } from "./files"
+import { parseFileReferences, buildFileAttachments } from "./files"
 
 const HANDOFF_COMMAND = `GOAL: You are creating a handoff message to continue work in a new session.
 
@@ -41,63 +41,76 @@ USER: $ARGUMENTS
 After generating the handoff message, IMMEDIATELY call handoff_session with your prompt and files:
 \`handoff_session(prompt="...", files=["src/foo.ts", "src/bar.ts", ...])\``
 
-export const HandoffPlugin: Plugin = async (ctx) => {
-  const processedSessions = new Set<string>()
+export default Plugin.define({
+  id: "handoff",
+  async setup(ctx) {
+    const processedSessions = new Set<string>()
+    const abort = new AbortController()
 
-  return {
-    config: async (config) => {
-      config.command = config.command || {}
-      config.command["handoff"] = {
-        description: "Create a focused handoff prompt for a new session",
-        template: HANDOFF_COMMAND,
+    // Free the per-session dedupe entry once a session is deleted.
+    const events = (async () => {
+      for await (const event of ctx.event.subscribe({ signal: abort.signal })) {
+        if (event.type === "session.deleted") {
+          processedSessions.delete(event.data.sessionID)
+        }
       }
-    },
+    })()
+    events.catch(() => {})
 
-    tool: {
-      handoff_session: HandoffSession(ctx.client),
-      read_session: ReadSession(ctx.client),
-    },
+    // V2 plugin commands run server-side instead of inserting a template into
+    // the TUI input, so the expanded template is submitted to the session
+    // directly. The assistant then generates the handoff and calls
+    // handoff_session, same as after V1's template was sent.
+    const commandRegistration = await ctx.command.transform((editor) => {
+      editor.add({
+        name: "handoff",
+        description: "Create a focused handoff prompt for a new session",
+        execute: async ({ sessionID, prompt, delivery }) => {
+          const text = HANDOFF_COMMAND.replace("$ARGUMENTS", prompt.text)
+          await ctx.session.prompt({ sessionID, text, delivery })
+        },
+      })
+    })
 
-    "chat.message": async (_input, output) => {
-      const sessionID = output.message.sessionID
+    const toolRegistration = await ctx.tool.transform((editor) => {
+      editor.add(HandoffSession(ctx))
+      editor.add(ReadSession(ctx))
+    })
+
+    // V1's chat.message hook injected referenced files into the new session
+    // after the handoff prompt was sent. The V2 prompt hook attaches them as
+    // prompt file attachments before admission, which OpenCode resolves
+    // through its normal attachment loading path.
+    const promptRegistration = await ctx.session.hook("prompt", async (event) => {
+      const { sessionID, prompt } = event
 
       if (processedSessions.has(sessionID)) return
-
-      // Get non-synthetic text from the message
-      const text = output.parts
-        .filter((p): p is typeof p & { type: "text"; text: string } =>
-          p.type === "text" && !p.synthetic && typeof p.text === "string"
-        )
-        .map(p => p.text)
-        .join("\n")
-
-      if (!text.includes("Continuing work from session")) return
+      if (!prompt.text.includes("Continuing work from session")) return
 
       processedSessions.add(sessionID)
 
-      const fileRefs = parseFileReferences(text)
+      const fileRefs = parseFileReferences(prompt.text)
       if (fileRefs.size === 0) return
 
-      const fileParts = await buildSyntheticFileParts(ctx.directory, fileRefs)
-      if (fileParts.length === 0) return
+      const attachments = await buildFileAttachments(ctx.location.directory, fileRefs)
+      if (attachments.length === 0) return
 
-      // Inject file parts via noReply
-      // Must pass model and agent to prevent mode/model switching
-      await ctx.client.session.prompt({
-        path: { id: sessionID },
-        body: {
-          noReply: true,
-          model: output.message.model,
-          agent: output.message.agent,
-          parts: fileParts,
-        },
-      })
-    },
-
-    event: async ({ event }) => {
-      if (event.type === "session.deleted") {
-        processedSessions.delete(event.properties.info.id)
+      const existing = new Set((prompt.files ?? []).map((file) => file.uri))
+      for (const attachment of attachments) {
+        if (!existing.has(attachment.uri)) {
+          prompt.files ??= []
+          prompt.files.push(attachment)
+        }
       }
+    })
+
+    return async () => {
+      abort.abort()
+      await Promise.all([
+        commandRegistration.dispose(),
+        toolRegistration.dispose(),
+        promptRegistration.dispose(),
+      ])
     }
-  }
-}
+  },
+})

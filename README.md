@@ -8,12 +8,12 @@ Inspired by Amp's handoff command - see their [post](https://ampcode.com/news/ha
 
 - `/handoff <goal>` command that analyzes the conversation and generates a continuation prompt
 - Guides the AI to include relevant `@file` references so the next session starts with context loaded
-- Opens a new session with the prompt as an editable draft
+- Starts a new session with the handoff prompt and attaches the referenced files
 - `read_session` tool for retrieving full conversation transcripts from previous sessions when the handoff summary isn't sufficient
 
 ## Requirements
 
-- [OpenCode](https://opencode.ai/) v1.2.15 or later
+- [OpenCode](https://opencode.ai/) v2.0 or later (this plugin uses the V2 plugin API; v0.5.0 is the last release for OpenCode v1)
 
 ## Installation
 
@@ -21,7 +21,7 @@ Add to your OpenCode config (`~/.config/opencode/opencode.json`):
 
 ```json
 {
-  "plugin": ["opencode-handoff"]
+  "plugins": ["opencode-handoff"]
 }
 ```
 
@@ -31,7 +31,7 @@ Optionally, pin to a specific version for stability:
 
 ```json
 {
-  "plugin": ["opencode-handoff@0.5.0"]
+  "plugins": ["opencode-handoff@0.6.0"]
 }
 ```
 
@@ -41,8 +41,9 @@ OpenCode fetches unpinned plugins from npm on each startup; pinned versions are 
 
 1. Have a conversation in OpenCode with some context
 2. When ready to continue in a fresh session, type `/handoff <your goal>`
-3. A new session opens with the handoff prompt as an editable draft
-4. Review and edit the draft if needed, then send
+3. The AI analyzes the conversation, generates the handoff prompt, and starts a new session with it
+
+> **Note (v0.6, OpenCode V2):** V2 plugins can no longer control the TUI, so the handoff session starts immediately with the prompt instead of opening an editable draft, and the referenced files are attached to the prompt through OpenCode's attachment API instead of `@file` text that the TUI resolves.
 
 **Example:**
 
@@ -50,7 +51,7 @@ OpenCode fetches unpinned plugins from npm on each startup; pinned versions are 
 /handoff implement the user authentication feature we discussed
 ```
 
-The AI analyzes the conversation, extracts key decisions and relevant files, generates a focused prompt, and creates a new session with that prompt ready to edit.
+The AI analyzes the conversation, extracts key decisions and relevant files, generates a focused prompt, and starts a new session with it.
 
 ### Reading Previous Session Transcripts
 

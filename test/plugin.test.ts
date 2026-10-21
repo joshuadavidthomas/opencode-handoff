@@ -1,143 +1,235 @@
 import { describe, expect, test } from "bun:test"
-import type { PluginInput } from "@opencode-ai/plugin"
 import { mkdtemp, rm, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
-import { HandoffPlugin } from "../src/plugin"
-import type { OpencodeClient } from "../src/tools"
+import { pathToFileURL } from "node:url"
+import type { Plugin } from "@opencode/plugin"
+import HandoffPlugin from "../src/plugin"
 
-function createPluginInput(
-  directory: string,
-  client: OpencodeClient
-): PluginInput {
-  return {
-    client,
-    directory,
-    worktree: directory,
-    project: {},
-    serverUrl: new URL("http://localhost"),
-    $: {},
-  } as unknown as PluginInput
+type Context = Plugin.Context
+
+type PromptHookEvent = {
+  sessionID: string
+  messageID: string
+  prompt: { text: string; files?: Array<{ uri: string; name?: string }> }
+}
+
+/** Async event stream that lets tests push events into the plugin's subscription. */
+class FakeEventStream {
+  private queue: unknown[] = []
+  private waiting: ((result: IteratorResult<unknown>) => void) | undefined
+
+  push(event: unknown) {
+    const waiter = this.waiting
+    if (waiter) {
+      this.waiting = undefined
+      waiter({ value: event, done: false })
+    } else {
+      this.queue.push(event)
+    }
+  }
+
+  [Symbol.asyncIterator]() {
+    return {
+      next: () => {
+        const value = this.queue.shift()
+        if (value !== undefined) {
+          return Promise.resolve({ value, done: false as const })
+        }
+        return new Promise<IteratorResult<unknown>>((resolve) => {
+          this.waiting = resolve
+        })
+      },
+      return: () => Promise.resolve({ value: undefined, done: true as const }),
+    }
+  }
+}
+
+interface Captured {
+  commands: Array<{
+    name: string
+    description?: string
+    execute: (input: {
+      sessionID: string
+      prompt: { text: string }
+      delivery: string
+    }) => Promise<void>
+  }>
+  tools: Array<{ name: string; description: string; input: unknown }>
+  promptHook: ((event: PromptHookEvent) => Promise<void>) | undefined
+  promptCalls: unknown[]
+}
+
+function createContext(directory: string, events: FakeEventStream) {
+  const captured: Captured = {
+    commands: [],
+    tools: [],
+    promptHook: undefined,
+    promptCalls: [],
+  }
+  const registration = { async dispose() {} }
+
+  const ctx = {
+    location: { directory },
+    event: {
+      subscribe(_options?: unknown) {
+        return events
+      },
+    },
+    command: {
+      async transform(callback: (editor: { add(def: unknown): void }) => void) {
+        callback({
+          add(def) {
+            captured.commands.push(def as Captured["commands"][number])
+          },
+        })
+        return registration
+      },
+    },
+    tool: {
+      async transform(callback: (editor: { add(def: unknown): void }) => void) {
+        callback({
+          add(def) {
+            captured.tools.push(def as Captured["tools"][number])
+          },
+        })
+        return registration
+      },
+    },
+    session: {
+      async hook(name: string, callback: (event: PromptHookEvent) => Promise<void>) {
+        if (name === "prompt") captured.promptHook = callback
+        return registration
+      },
+      async prompt(input: unknown) {
+        captured.promptCalls.push(input)
+      },
+    },
+  }
+
+  return { ctx: ctx as unknown as Context, captured }
+}
+
+function flushEvents(): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, 0))
 }
 
 describe("HandoffPlugin", () => {
   test("registers the handoff command and tools", async () => {
-    const client = {} as OpencodeClient
-    const hooks = await HandoffPlugin(createPluginInput("/tmp/project", client))
-    const freshConfig: {
-      command?: Record<string, { description: string; template: string }>
-    } = {}
-    await hooks.config!(freshConfig as never)
-    expect(freshConfig.command?.handoff).toBeDefined()
+    const { ctx, captured } = createContext(
+      "/tmp/project",
+      new FakeEventStream()
+    )
 
-    const config: {
-      command: Record<string, { description: string; template: string }>
-    } = {
-      command: {
-        existing: { description: "Existing command", template: "keep me" },
-      },
-    }
-    await hooks.config!(config as never)
+    const cleanup = await HandoffPlugin.setup(ctx)
 
-    expect(config.command.existing).toEqual({
-      description: "Existing command",
-      template: "keep me",
+    expect(captured.commands).toHaveLength(1)
+    expect(captured.commands[0]?.name).toBe("handoff")
+    expect(captured.tools.map((tool) => tool.name)).toEqual([
+      "handoff_session",
+      "read_session",
+    ])
+
+    // The command expands $ARGUMENTS into the template and submits it to the
+    // current session, preserving the invocation's delivery mode.
+    await captured.commands[0]?.execute({
+      sessionID: "sess_current",
+      prompt: { text: "implement X" },
+      delivery: "steer",
     })
-    expect(config.command.handoff?.template).toContain("USER: $ARGUMENTS")
-    expect(hooks.tool?.handoff_session).toBeDefined()
-    expect(hooks.tool?.read_session).toBeDefined()
+
+    const call = captured.promptCalls[0] as {
+      sessionID: string
+      text: string
+      delivery: string
+    }
+    expect(call.sessionID).toBe("sess_current")
+    expect(call.delivery).toBe("steer")
+    expect(call.text).toContain("GOAL: You are creating a handoff message")
+    expect(call.text).toContain("USER: implement X")
+
+    await cleanup?.()
   })
 
-  test("injects referenced files once and resets after session deletion", async () => {
-    const directory = await mkdtemp(join(tmpdir(), "opencode-handoff-plugin-"))
+  test("attaches referenced files once per session and resets after deletion", async () => {
+    const directory = await mkdtemp(
+      join(tmpdir(), "opencode-handoff-plugin-")
+    )
 
     try {
       await writeFile(join(directory, "note.txt"), "handoff context")
-      const promptCalls: unknown[] = []
-      const client = {
-        session: {
-          async prompt(input: unknown) {
-            promptCalls.push(input)
-          },
-        },
-      } as unknown as OpencodeClient
-      const hooks = await HandoffPlugin(createPluginInput(directory, client))
-      const message = {
-        message: {
-          sessionID: "sess_next",
-          model: { providerID: "provider", modelID: "model" },
-          agent: "build",
-        },
-        parts: [
-          {
-            type: "text",
-            synthetic: true,
-            text: "Continuing work from session ignored @missing.txt",
-          },
-          {
-            type: "text",
-            text: "Continuing work from session sess_source @note.txt",
-          },
-        ],
-      }
 
-      await hooks["chat.message"]!(
-        { sessionID: "sess_next" } as never,
+      const events = new FakeEventStream()
+      const { ctx, captured } = createContext(directory, events)
+      await HandoffPlugin.setup(ctx)
+
+      const hook = captured.promptHook
+      expect(hook).toBeDefined()
+
+      // Prompts without the handoff marker are left untouched.
+      const ordinary: PromptHookEvent = {
+        sessionID: "sess_other",
+        messageID: "msg_0",
+        prompt: { text: "ordinary message @note.txt" },
+      }
+      await hook?.(ordinary)
+      expect(ordinary.prompt.files).toBeUndefined()
+
+      const handoff: PromptHookEvent = {
+        sessionID: "sess_next",
+        messageID: "msg_1",
+        prompt: {
+          text: "Continuing work from session sess_source @note.txt @missing.txt",
+        },
+      }
+      await hook?.(handoff)
+      expect(handoff.prompt.files).toEqual([
         {
-          message: message.message,
-          parts: [{ type: "text", text: "ordinary message @note.txt" }],
-        } as never
-      )
-      expect(promptCalls).toHaveLength(0)
+          uri: pathToFileURL(join(directory, "note.txt")).href,
+          name: "note.txt",
+        },
+      ])
 
-      await hooks["chat.message"]!(
-        { sessionID: "sess_next" } as never,
-        message as never
-      )
-      await hooks["chat.message"]!(
-        { sessionID: "sess_next" } as never,
-        message as never
-      )
-
-      expect(promptCalls).toHaveLength(1)
-      const promptCall = promptCalls[0] as {
-        path: { id: string }
-        body: {
-          noReply: boolean
-          model: unknown
-          agent: string
-          parts: Array<{ synthetic?: boolean; text: string }>
-        }
+      // A second handoff prompt in the same session does not re-attach.
+      const repeated: PromptHookEvent = {
+        sessionID: "sess_next",
+        messageID: "msg_2",
+        prompt: { text: handoff.prompt.text },
       }
-      expect(promptCall).toMatchObject({
-        path: { id: "sess_next" },
-        body: {
-          noReply: true,
-          model: { providerID: "provider", modelID: "model" },
-          agent: "build",
+      await hook?.(repeated)
+      expect(repeated.prompt.files).toBeUndefined()
+
+      // Attachments already present on the prompt are not duplicated.
+      const preattached: PromptHookEvent = {
+        sessionID: "sess_two",
+        messageID: "msg_3",
+        prompt: {
+          text: "Continuing work from session sess_source @note.txt",
+          files: [{ uri: pathToFileURL(join(directory, "note.txt")).href }],
         },
+      }
+      await hook?.(preattached)
+      expect(preattached.prompt.files).toHaveLength(1)
+
+      // Deleting the session resets the dedupe so a reused session attaches again.
+      events.push({
+        type: "session.deleted",
+        data: { sessionID: "sess_next" },
       })
-      expect(promptCall.body.parts).toHaveLength(2)
-      expect(promptCall.body.parts.every((part) => part.synthetic)).toBe(true)
-      expect(promptCall.body.parts.map((part) => part.text).join("\n")).toContain(
-        "handoff context"
-      )
-      expect(promptCall.body.parts.map((part) => part.text).join("\n")).not.toContain(
-        "missing.txt"
-      )
+      await flushEvents()
 
-      await hooks.event!({
-        event: {
-          type: "session.deleted",
-          properties: { info: { id: "sess_next" } },
+      const afterDeletion: PromptHookEvent = {
+        sessionID: "sess_next",
+        messageID: "msg_4",
+        prompt: { text: handoff.prompt.text },
+      }
+      await hook?.(afterDeletion)
+      expect(afterDeletion.prompt.files).toEqual([
+        {
+          uri: pathToFileURL(join(directory, "note.txt")).href,
+          name: "note.txt",
         },
-      } as never)
-      await hooks["chat.message"]!(
-        { sessionID: "sess_next" } as never,
-        message as never
-      )
-
-      expect(promptCalls).toHaveLength(2)
+      ])
     } finally {
       await rm(directory, { recursive: true, force: true })
     }
