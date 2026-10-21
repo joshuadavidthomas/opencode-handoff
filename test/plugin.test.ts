@@ -1,145 +1,193 @@
-import { describe, expect, test } from "bun:test"
-import type { PluginInput } from "@opencode-ai/plugin"
-import { mkdtemp, rm, writeFile } from "node:fs/promises"
-import { tmpdir } from "node:os"
-import { join } from "node:path"
-import { HandoffPlugin } from "../src/plugin"
-import type { OpencodeClient } from "../src/tools"
+import { afterEach, describe, expect, jest, test } from "bun:test"
+import type { Plugin } from "@opencode/plugin"
+import type { CommandDefinition } from "@opencode/plugin/promise/command"
+import type { Info as ToolInfo } from "@opencode/plugin/promise/tool"
+import HandoffPlugin from "../index"
+import { CLAIM_TIMEOUT_MS } from "../src/plugin"
 
-function createPluginInput(
-  directory: string,
-  client: OpencodeClient
-): PluginInput {
-  return {
-    client,
-    directory,
-    worktree: directory,
-    project: {},
-    serverUrl: new URL("http://localhost"),
-    $: {},
-  } as unknown as PluginInput
+type Handler = (input: unknown, context: unknown) => Promise<unknown>
+
+const RPC_CONTEXT = {
+  signal: new AbortController().signal,
+  error: (type: string, message: string, data: unknown) => ({ type, message, data }),
 }
+
+async function setupPlugin(options: Record<string, unknown> = {}) {
+  const commands: Record<string, CommandDefinition> = {}
+  const tools: Record<string, ToolInfo> = {}
+  const handlers: Record<string, Handler> = {}
+  const drafts: Array<{ draftID: string; sourceSessionID: string; text: string }> = []
+  const started: unknown[] = []
+  const prompts: Array<{ sessionID: string; text: string }> = []
+  const ctx = {
+    location: { directory: "/tmp/project" },
+    options,
+    rpc: {
+      async register(definition: { id: string }, registered: Record<string, Handler>) {
+        expect(definition.id).toBe("opencode-handoff")
+        Object.assign(handlers, registered)
+        return {
+          events: {
+            async emit(name: string, data: never) {
+              if (name === "draft") drafts.push(data)
+              else if (name === "started") started.push(data)
+              else throw new Error(`unexpected event ${name}`)
+            },
+          },
+        }
+      },
+    },
+    command: {
+      async transform(transform: (editor: { add(command: CommandDefinition): void }) => void) {
+        transform({ add: (command) => { commands[command.name] = command } })
+      },
+    },
+    tool: {
+      async transform(transform: (editor: { add(tool: ToolInfo): void }) => void) {
+        transform({ add: (tool) => { tools[tool.name] = tool } })
+      },
+    },
+    session: {
+      async get() {
+        return { id: "sess_source" }
+      },
+      async create() {
+        return { id: "sess_new" }
+      },
+      async prompt(input: never) {
+        prompts.push(input)
+      },
+    },
+  } as unknown as Plugin.Context
+
+  await HandoffPlugin.setup(ctx)
+
+  /** Run handoff_session until its draft has been announced. */
+  async function handoff() {
+    const abort = new AbortController()
+    let done = false
+    const result = tools.handoff_session!.execute(
+      { prompt: "Continue the work" },
+      { sessionID: "sess_source", agent: "plan", signal: abort.signal } as never
+    )
+    result.then(() => (done = true))
+    while (drafts.length === 0) await Promise.resolve()
+    return { result, draft: drafts.at(-1)!, abort, done: () => done }
+  }
+
+  return { commands, tools, handlers, prompts, drafts, started, handoff }
+}
+
+afterEach(() => {
+  jest.useRealTimers()
+})
 
 describe("HandoffPlugin", () => {
   test("registers the handoff command and tools", async () => {
-    const client = {} as OpencodeClient
-    const hooks = await HandoffPlugin(createPluginInput("/tmp/project", client))
-    const freshConfig: {
-      command?: Record<string, { description: string; template: string }>
-    } = {}
-    await hooks.config!(freshConfig as never)
-    expect(freshConfig.command?.handoff).toBeDefined()
+    const { commands, tools } = await setupPlugin()
 
-    const config: {
-      command: Record<string, { description: string; template: string }>
-    } = {
-      command: {
-        existing: { description: "Existing command", template: "keep me" },
-      },
-    }
-    await hooks.config!(config as never)
-
-    expect(config.command.existing).toEqual({
-      description: "Existing command",
-      template: "keep me",
-    })
-    expect(config.command.handoff?.template).toContain("USER: $ARGUMENTS")
-    expect(hooks.tool?.handoff_session).toBeDefined()
-    expect(hooks.tool?.read_session).toBeDefined()
+    expect(HandoffPlugin.id).toBe("opencode-handoff")
+    expect(Object.keys(commands)).toEqual(["handoff"])
+    expect(Object.keys(tools).sort()).toEqual(["handoff_session", "read_session"])
   })
 
-  test("injects referenced files once and resets after session deletion", async () => {
-    const directory = await mkdtemp(join(tmpdir(), "opencode-handoff-plugin-"))
+  test("/handoff submits the template with the user's goal and attachments", async () => {
+    const { commands, prompts } = await setupPlugin()
+    const files = [{ uri: "file:///tmp/project/spec.md" }]
 
-    try {
-      await writeFile(join(directory, "note.txt"), "handoff context")
-      const promptCalls: unknown[] = []
-      const client = {
-        session: {
-          async prompt(input: unknown) {
-            promptCalls.push(input)
-          },
-        },
-      } as unknown as OpencodeClient
-      const hooks = await HandoffPlugin(createPluginInput(directory, client))
-      const message = {
-        message: {
-          sessionID: "sess_next",
-          model: { providerID: "provider", modelID: "model" },
-          agent: "build",
-        },
-        parts: [
-          {
-            type: "text",
-            synthetic: true,
-            text: "Continuing work from session ignored @missing.txt",
-          },
-          {
-            type: "text",
-            text: "Continuing work from session sess_source @note.txt",
-          },
-        ],
-      }
+    await commands.handoff!.execute({
+      sessionID: "sess_source",
+      delivery: "queue",
+      prompt: { text: "keep $& and $' literal", files },
+    } as never)
 
-      await hooks["chat.message"]!(
-        { sessionID: "sess_next" } as never,
-        {
-          message: message.message,
-          parts: [{ type: "text", text: "ordinary message @note.txt" }],
-        } as never
-      )
-      expect(promptCalls).toHaveLength(0)
+    expect(prompts).toHaveLength(1)
+    const prompt = prompts[0] as unknown as { sessionID: string; delivery: string; text: string; files: unknown }
+    expect(prompt.sessionID).toBe("sess_source")
+    expect(prompt.delivery).toBe("queue")
+    expect(prompt.files).toEqual(files)
+    expect(prompt.text).toContain("USER: keep $& and $' literal\n")
+    expect(prompt.text).not.toContain("$ARGUMENTS")
+  })
 
-      await hooks["chat.message"]!(
-        { sessionID: "sess_next" } as never,
-        message as never
-      )
-      await hooks["chat.message"]!(
-        { sessionID: "sess_next" } as never,
-        message as never
-      )
+  test("a claimed draft waits for the user, then reports the session they sent", async () => {
+    jest.useFakeTimers()
+    const { handlers, prompts, handoff } = await setupPlugin()
+    const { result, draft, done } = await handoff()
 
-      expect(promptCalls).toHaveLength(1)
-      const promptCall = promptCalls[0] as {
-        path: { id: string }
-        body: {
-          noReply: boolean
-          model: unknown
-          agent: string
-          parts: Array<{ synthetic?: boolean; text: string }>
-        }
-      }
-      expect(promptCall).toMatchObject({
-        path: { id: "sess_next" },
-        body: {
-          noReply: true,
-          model: { providerID: "provider", modelID: "model" },
-          agent: "build",
-        },
-      })
-      expect(promptCall.body.parts).toHaveLength(2)
-      expect(promptCall.body.parts.every((part) => part.synthetic)).toBe(true)
-      expect(promptCall.body.parts.map((part) => part.text).join("\n")).toContain(
-        "handoff context"
-      )
-      expect(promptCall.body.parts.map((part) => part.text).join("\n")).not.toContain(
-        "missing.txt"
-      )
+    expect(draft.sourceSessionID).toBe("sess_source")
+    expect(draft.text).toContain("Continue the work")
+    expect(await handlers.claim!({ draftID: draft.draftID }, RPC_CONTEXT)).toEqual({ claimed: true })
+    expect(await handlers.claim!({ draftID: draft.draftID }, RPC_CONTEXT)).toEqual({ claimed: false })
 
-      await hooks.event!({
-        event: {
-          type: "session.deleted",
-          properties: { info: { id: "sess_next" } },
-        },
-      } as never)
-      await hooks["chat.message"]!(
-        { sessionID: "sess_next" } as never,
-        message as never
-      )
+    // A slow review must not fall back to starting the session without the user.
+    jest.advanceTimersByTime(CLAIM_TIMEOUT_MS * 10)
+    await Promise.resolve()
+    expect(done()).toBe(false)
+    expect(prompts).toEqual([])
 
-      expect(promptCalls).toHaveLength(2)
-    } finally {
-      await rm(directory, { recursive: true, force: true })
-    }
+    expect(await handlers.start!({ draftID: draft.draftID, text: "Edited handoff" }, RPC_CONTEXT)).toEqual({
+      sessionID: "sess_new",
+    })
+    expect(prompts).toEqual([{ sessionID: "sess_new", text: "Edited handoff", files: [] } as never])
+    expect((await result).content).toBe("Started handoff session sess_new with 0 attached file(s).")
+    expect(await handlers.start!({ draftID: draft.draftID, text: "again" }, RPC_CONTEXT)).toMatchObject({
+      type: "not_found",
+    })
+  })
+
+  test("a cancelled draft never starts and the tool reports the cancel", async () => {
+    const { handlers, prompts, handoff } = await setupPlugin()
+    const { result, draft } = await handoff()
+
+    await handlers.claim!({ draftID: draft.draftID }, RPC_CONTEXT)
+    await handlers.cancel!({ draftID: draft.draftID }, RPC_CONTEXT)
+
+    expect((await result).content).toBe("The user cancelled the handoff.")
+
+    expect(await handlers.start!({ draftID: draft.draftID, text: "Edited" }, RPC_CONTEXT)).toMatchObject({
+      type: "not_found",
+    })
+    expect(prompts).toEqual([])
+  })
+
+  test("interrupting the source session stops waiting on the review", async () => {
+    const { handlers, prompts, handoff } = await setupPlugin()
+    const { result, draft, abort } = await handoff()
+
+    await handlers.claim!({ draftID: draft.draftID }, RPC_CONTEXT)
+    abort.abort()
+
+    expect((await result).content).toBe("The user cancelled the handoff.")
+    expect(await handlers.start!({ draftID: draft.draftID, text: "Edited" }, RPC_CONTEXT)).toMatchObject({
+      type: "not_found",
+    })
+    expect(prompts).toEqual([])
+  })
+
+  test("with review off, starts the session right away and tells the TUI", async () => {
+    const { tools, prompts, drafts, started } = await setupPlugin({ review: false })
+
+    const result = await tools.handoff_session!.execute(
+      { prompt: "Continue the work" },
+      { sessionID: "sess_source", agent: "plan", signal: new AbortController().signal } as never
+    )
+
+    expect(result.content).toBe("Started handoff session sess_new with 0 attached file(s).")
+    expect(drafts).toEqual([])
+    expect(prompts).toHaveLength(1)
+    expect(started).toEqual([{ sessionID: "sess_new", sourceSessionID: "sess_source" }])
+  })
+
+  test("starts the handoff without review when no TUI claims the draft", async () => {
+    jest.useFakeTimers()
+    const { handlers, prompts, handoff } = await setupPlugin()
+    const { result, draft } = await handoff()
+
+    jest.advanceTimersByTime(CLAIM_TIMEOUT_MS)
+
+    expect((await result).content).toBe("Started handoff session sess_new with 0 attached file(s).")
+    expect(prompts).toEqual([{ sessionID: "sess_new", text: draft.text, files: [] } as never])
+    expect(await handlers.claim!({ draftID: draft.draftID }, RPC_CONTEXT)).toEqual({ claimed: false })
   })
 })
