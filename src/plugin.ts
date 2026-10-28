@@ -11,14 +11,22 @@ const HANDOFF_COMMAND = `GOAL: You are creating a handoff message to continue wo
 When an AI assistant starts a fresh session, it spends significant time exploring the codebase—grepping, reading files, searching—before it can begin actual work. This "file archaeology" is wasteful when the previous session already discovered what matters.
 
 A good handoff frontloads everything the next session needs so it can start implementing immediately.
+
+The new session receives NO file contents. Instead, it gets a manifest of files with precise descriptions, and it reads each file itself with its tools — in the order it prefers, keeping its context manageable (tool results are far easier to manage than attached content).
 </context>
 
 <instructions>
 Analyze this conversation and extract what matters for continuing the work.
 
-1. Identify all relevant files that should be loaded into the next session's context
+1. Build a file manifest for the next session
 
-   Include files that will be edited, dependencies being touched, relevant tests, configs, and key reference docs. Be generous—the cost of an extra file is low; missing a critical one means another archaeology dig. Target 8-15 files, up to 20 for complex work.
+   List the files that matter for continuing this work: files that will be edited, dependencies being touched, relevant tests, configs, and key reference docs. Listing is VERY cheap—each file costs one line and the new session reads nothing it has not chosen to read—so there is no upper bound. List every file that could matter; missing a critical one means another archaeology dig.
+
+   Order the files by importance, most important first. If there are more than 10, the most important 10 become the main manifest and the rest are listed separately as "other context".
+
+   For each file, describe exactly what is in it: the key functions, types, or sections it contains; its current state where that matters (partial edits, known failures, TODOs); and why it matters for this work. Name concrete symbols—a description like "config file" is useless; "test/tools.test.ts: covers handoff_session draft assembly and ReadSession transcript formatting" is usable.
+
+   Never use @file references in the prompt or anywhere else. The manifest you pass to handoff_session is the only file list; the descriptions are how the new session decides what to read and in what order.
 
 2. Draft the context and goal description
 
@@ -41,8 +49,8 @@ USER: $ARGUMENTS
 
 ---
 
-After generating the handoff message, IMMEDIATELY call handoff_session with your prompt and files:
-\`handoff_session(prompt="...", files=["src/foo.ts", "src/bar.ts", ...])\``
+After generating the handoff message, IMMEDIATELY call handoff_session with your prompt and file manifest:
+\`handoff_session(prompt="...", files=[{path: "src/foo.ts", description: "what is in this file and why it matters"}, ...])\``
 
 export default Plugin.define({
   id: "opencode-handoff",

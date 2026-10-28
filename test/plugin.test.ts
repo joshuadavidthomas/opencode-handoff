@@ -129,8 +129,10 @@ describe("HandoffPlugin", () => {
     expect(await handlers.start!({ draftID: draft.draftID, text: "Edited handoff" }, RPC_CONTEXT)).toEqual({
       sessionID: "sess_new",
     })
-    expect(prompts).toEqual([{ sessionID: "sess_new", text: "Edited handoff", files: [] } as never])
-    expect((await result).content).toBe("Started handoff session sess_new with 0 attached file(s).")
+    expect(prompts).toEqual([{ sessionID: "sess_new", text: "Edited handoff" } as never])
+    expect((await result).content).toBe(
+      "Started handoff session sess_new with 0 listed file(s) — contents are not attached, the new session reads them itself."
+    )
     expect(await handlers.start!({ draftID: draft.draftID, text: "again" }, RPC_CONTEXT)).toMatchObject({
       type: "not_found",
     })
@@ -173,9 +175,15 @@ describe("HandoffPlugin", () => {
       { sessionID: "sess_source", agent: "plan", signal: new AbortController().signal } as never
     )
 
-    expect(result.content).toBe("Started handoff session sess_new with 0 attached file(s).")
+    expect(result.content).toBe(
+      "Started handoff session sess_new with 0 listed file(s) — contents are not attached, the new session reads them itself."
+    )
     expect(drafts).toEqual([])
     expect(prompts).toHaveLength(1)
+    expect(prompts[0]).toEqual({
+      sessionID: "sess_new",
+      text: "Continuing work from session sess_source. When you lack specific information you can use read_session to get it.\n\nContinue the work",
+    })
     expect(started).toEqual([{ sessionID: "sess_new", sourceSessionID: "sess_source" }])
   })
 
@@ -186,8 +194,10 @@ describe("HandoffPlugin", () => {
 
     jest.advanceTimersByTime(CLAIM_TIMEOUT_MS)
 
-    expect((await result).content).toBe("Started handoff session sess_new with 0 attached file(s).")
-    expect(prompts).toEqual([{ sessionID: "sess_new", text: draft.text, files: [] } as never])
+    expect((await result).content).toBe(
+      "Started handoff session sess_new with 0 listed file(s) — contents are not attached, the new session reads them itself."
+    )
+    expect(prompts).toEqual([{ sessionID: "sess_new", text: draft.text } as never])
     expect(started).toEqual([{ sessionID: "sess_new", sourceSessionID: "sess_source" }])
     expect(await handlers.claim!({ draftID: draft.draftID }, RPC_CONTEXT)).toEqual({ claimed: false })
   })
