@@ -18,6 +18,24 @@ and this project attempts to adhere to [Semantic Versioning](https://semver.org/
 
 ## [Unreleased]
 
+## [0.7.0]
+
+### Added
+
+- Hybrid file selection: attach the immediate working set and list secondary files with descriptions for reading later.
+- File controls in the review dialog: include or omit contents, remove files, search project files with OpenCode's picker, or exclude all file contents.
+- Approximate prompt, file-content, and total token estimates in the review dialog.
+- Set the `attachFiles` plugin option to `false` to disable attachments, including when review is skipped.
+
+### Changed
+
+- **Breaking:** `handoff_session.files` now accepts `{ path, description, mode: "attach" | "list" }` entries instead of strings. Typing an `@path` in the summary no longer attaches that file.
+- `/handoff` now recommends attaching 3–5 files for the next task rather than loading every relevant file. The suggested count is guidance, not an enforced limit.
+
+### Fixed
+
+- Claims completing after the TUI plugin is disabled no longer reopen the handoff review.
+
 ## [0.6.1]
 
 ### Fixed
@@ -117,7 +135,7 @@ and this project attempts to adhere to [Semantic Versioning](https://semver.org/
 
 - Josh Thomas <josh@joshthomas.dev> (maintainer)
 
-[unreleased]: https://github.com/joshuadavidthomas/opencode-handoff/compare/v0.6.1...HEAD
+[unreleased]: https://github.com/joshuadavidthomas/opencode-handoff/compare/v0.7.0...HEAD
 [0.1.0]: https://github.com/joshuadavidthomas/opencode-handoff/releases/tag/v0.1.0
 [0.2.0]: https://github.com/joshuadavidthomas/opencode-handoff/releases/tag/v0.2.0
 [0.3.0]: https://github.com/joshuadavidthomas/opencode-handoff/releases/tag/v0.3.0
@@ -128,3 +146,4 @@ and this project attempts to adhere to [Semantic Versioning](https://semver.org/
 [0.5.0]: https://github.com/joshuadavidthomas/opencode-handoff/releases/tag/v0.5.0
 [0.6.0]: https://github.com/joshuadavidthomas/opencode-handoff/releases/tag/v0.6.0
 [0.6.1]: https://github.com/joshuadavidthomas/opencode-handoff/releases/tag/v0.6.1
+[0.7.0]: https://github.com/joshuadavidthomas/opencode-handoff/releases/tag/v0.7.0
