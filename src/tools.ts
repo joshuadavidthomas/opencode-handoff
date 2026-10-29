@@ -8,7 +8,8 @@
 
 import type { Plugin } from "@opencode/plugin"
 import type { Info as ToolInfo } from "@opencode/plugin/promise/tool"
-import { buildFileAttachments, parseFileReferences } from "./files"
+import { estimateTokens, prepareFiles } from "./files"
+import { HandoffFileSchema, type HandoffFile, type HandoffPreview } from "./rpc"
 
 type Context = Plugin.Context
 type SessionMessages = Awaited<ReturnType<Context["session"]["context"]>>
@@ -17,24 +18,59 @@ export interface HandoffDraft {
   readonly sourceSessionID: string
   readonly agent: string
   readonly text: string
+  readonly files: HandoffFile[]
 }
 
-export type HandoffStarted = { sessionID: string; files: number }
+export type HandoffStarted = { sessionID: string; files: number; listed: number }
 export type HandoffOutcome = HandoffStarted | { cancelled: true }
 
 /** Offers a draft for review and resolves with the user's decision, or with the session started without review if no TUI claimed it. */
 export type ReviewDraft = (draft: HandoffDraft, signal: AbortSignal) => Promise<HandoffOutcome>
 
-/**
- * Start the handoff session with the source session's agent and model,
- * attaching every @file the draft references.
- */
+export async function prepareHandoff(ctx: Context, draft: HandoffDraft) {
+  const prepared = await prepareFiles(ctx.location.directory, draft.files, ctx.options.attachFiles !== false)
+  const manifest = prepared.files.length ? [
+    "## Files",
+    "",
+    "Attached files are preloaded. Read list-only files with tools if needed.",
+    "",
+    ...prepared.files.map((file) => {
+      const status = file.attachment === null ? "list only"
+        : "tokens" in file.attachment ? "attached" : `list only: ${file.attachment.reason}`
+      const name = file.path.replace(/`/g, "\\`")
+      return `- \`${name}\` (${status})${file.description ? `: ${file.description}` : ""}`
+    }),
+  ].join("\n") : ""
+  const text = [
+    `Continuing work from session ${draft.sourceSessionID}. When you lack specific information you can use read_session to get it.`,
+    draft.text,
+    manifest,
+  ].filter(Boolean).join("\n\n")
+  const promptTokens = estimateTokens(text)
+  let attachmentTokens: number | null = 0
+  for (const file of prepared.files) {
+    if (file.attachment && "reason" in file.attachment) {
+      attachmentTokens = null
+      break
+    }
+    if (file.attachment) attachmentTokens += file.attachment.tokens
+  }
+  const preview: HandoffPreview = {
+    files: prepared.files,
+    promptTokens,
+    attachmentTokens,
+    totalTokens: attachmentTokens === null ? null : promptTokens + attachmentTokens,
+  }
+  return { text, attachments: prepared.attachments, preview }
+}
+
+/** Preview and send share file resolution and policy; send always rechecks current files. */
 export async function startHandoff(ctx: Context, draft: HandoffDraft): Promise<HandoffStarted> {
-  const files = await buildFileAttachments(ctx.location.directory, parseFileReferences(draft.text))
+  const prepared = await prepareHandoff(ctx, draft)
   const source = await ctx.session.get({ sessionID: draft.sourceSessionID })
   const session = await ctx.session.create({ agent: draft.agent, model: source.model })
-  await ctx.session.prompt({ sessionID: session.id, text: draft.text, files })
-  return { sessionID: session.id, files: files.length }
+  await ctx.session.prompt({ sessionID: session.id, text: prepared.text, files: prepared.attachments })
+  return { sessionID: session.id, files: prepared.attachments.length, listed: prepared.preview.files.length - prepared.attachments.length }
 }
 
 /**
@@ -43,30 +79,32 @@ export async function startHandoff(ctx: Context, draft: HandoffDraft): Promise<H
  */
 export const HandoffSession = (ctx: Context, review: ReviewDraft): ToolInfo => ({
   name: "handoff_session",
-  description: "Start a new session with the handoff prompt and the files it references",
+  description: "Start a new session with a handoff summary, a small attached working set, and a described reading list of secondary files",
   input: {
     type: "object",
     properties: {
       prompt: { type: "string", description: "The generated handoff prompt" },
       files: {
         type: "array",
-        items: { type: "string" },
-        description: "Array of file paths to load into the new session's context",
+        items: HandoffFileSchema,
+        description: "Files in importance order. Attach only files needed immediately; list secondary files without loading their contents.",
       },
     },
     required: ["prompt"],
     additionalProperties: false,
   },
   async execute(input, context) {
-    const args = input as { prompt: string; files?: string[] }
-    const sessionReference = `Continuing work from session ${context.sessionID}. When you lack specific information you can use read_session to get it.`
-    const fileRefs = args.files?.map((file) => `@${file.replace(/^@/, "")}`).join(" ")
-    const text = [sessionReference, fileRefs, args.prompt].filter(Boolean).join("\n\n")
-    const draft = { sourceSessionID: context.sessionID, agent: context.agent, text }
+    const args = input as { prompt: string; files?: HandoffFile[] }
+    const draft: HandoffDraft = {
+      sourceSessionID: context.sessionID,
+      agent: context.agent,
+      text: args.prompt,
+      files: (args.files ?? []).map((file) => ctx.options.attachFiles === false ? { ...file, mode: "list" } : file),
+    }
 
     const outcome = await review(draft, context.signal)
     if ("cancelled" in outcome) return { content: "The user cancelled the handoff." }
-    return { content: `Started handoff session ${outcome.sessionID} with ${outcome.files} attached file(s).` }
+    return { content: `Started handoff session ${outcome.sessionID} with ${outcome.files} attached and ${outcome.listed} list-only file(s).` }
   },
 })
 

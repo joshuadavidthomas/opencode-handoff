@@ -23,7 +23,7 @@
   },
   "files": ["dist", "README.md"],
   "scripts": {
-    "build": "bun build ./index.ts ./tui.ts --outdir ./dist --target node --format esm --packages external",
+    "build": "bun build.ts",
     "prepack": "bun run build",
     "test": "bun test",
     "typecheck": "tsc --noEmit"

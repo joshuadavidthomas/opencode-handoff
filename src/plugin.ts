@@ -1,6 +1,6 @@
 import { Plugin } from "@opencode/plugin"
-import { Handoff } from "./rpc"
-import { HandoffSession, ReadSession, startHandoff, type HandoffDraft, type HandoffOutcome } from "./tools"
+import { Handoff, type HandoffFile } from "./rpc"
+import { HandoffSession, ReadSession, prepareHandoff, startHandoff, type HandoffDraft, type HandoffOutcome } from "./tools"
 
 /** How long a TUI has to claim a draft before the handoff starts without review. */
 export const CLAIM_TIMEOUT_MS = 3000
@@ -16,9 +16,13 @@ A good handoff frontloads everything the next session needs so it can start impl
 <instructions>
 Analyze this conversation and extract what matters for continuing the work.
 
-1. Identify all relevant files that should be loaded into the next session's context
+1. Select files for the next task, not everything relevant to the previous conversation
 
-   Include files that will be edited, dependencies being touched, relevant tests, configs, and key reference docs. Be generous—the cost of an extra file is low; missing a critical one means another archaeology dig. Target 8-15 files, up to 20 for complex work.
+   Attach only the immediate working set: files the next session must read to begin, usually the implementation being changed and its closest tests. Aim for 3-5 attached files as a starting point, not a quota. Consider file size; a single large file can consume substantial context. Order files by importance to the next task.
+
+   List secondary files without attaching them: supporting dependencies, configs, and reference docs that may be useful later. For every file, describe the concrete symbols or sections it contains and why it matters. Use mode "attach" for the immediate working set and "list" for secondary context. The user's configuration may disable attachments entirely.
+
+   Pass all file choices through the files argument. Do not use @ references to request attachments, and do not duplicate the file manifest in your prompt.
 
 2. Draft the context and goal description
 
@@ -42,7 +46,7 @@ USER: $ARGUMENTS
 ---
 
 After generating the handoff message, IMMEDIATELY call handoff_session with your prompt and files:
-\`handoff_session(prompt="...", files=["src/foo.ts", "src/bar.ts", ...])\``
+\`handoff_session(prompt="...", files=[{path: "src/foo.ts", description: "key symbols and why this file matters", mode: "attach"}, {path: "README.md", description: "setup and usage reference", mode: "list"}])\``
 
 export default Plugin.define({
   id: "opencode-handoff",
@@ -68,18 +72,24 @@ export default Plugin.define({
         return { claimed: true }
       },
       async start(input, context) {
-        const { draftID, text } = input as { draftID: string; text: string }
+        const { draftID, text, files } = input as { draftID: string; text: string; files: HandoffFile[] }
         const pending = drafts.get(draftID)
         if (!pending || pending.claim) return context.error("not_found", "Handoff draft not found", { draftID })
         drafts.delete(draftID)
         try {
-          const outcome = await startHandoff(ctx, { ...pending.draft, text })
+          const outcome = await startHandoff(ctx, { ...pending.draft, text, files })
           pending.settle(outcome)
           return { sessionID: outcome.sessionID }
         } catch (error) {
           pending.fail(error)
           throw error
         }
+      },
+      async preview(input, context) {
+        const { draftID, text, files } = input as { draftID: string; text: string; files: HandoffFile[] }
+        const pending = drafts.get(draftID)
+        if (!pending || pending.claim) return context.error("not_found", "Handoff draft not found", { draftID })
+        return (await prepareHandoff(ctx, { ...pending.draft, text, files })).preview
       },
       async cancel(input) {
         const draftID = (input as { draftID: string }).draftID
@@ -107,7 +117,13 @@ export default Plugin.define({
           },
           { once: true }
         )
-        rpc.events.emit("draft", { draftID, sourceSessionID: draft.sourceSessionID, text: draft.text }).catch(reject)
+        rpc.events.emit("draft", {
+          draftID,
+          sourceSessionID: draft.sourceSessionID,
+          text: draft.text,
+          files: draft.files,
+          attachFiles: ctx.options.attachFiles !== false,
+        }).catch(reject)
       })
     }
 

@@ -1,10 +1,10 @@
 import { describe, expect, test } from "bun:test"
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises"
+import { mkdtemp, rm, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { pathToFileURL } from "node:url"
 import type { Plugin } from "@opencode/plugin"
-import { HandoffSession, ReadSession, startHandoff } from "../src/tools"
+import { HandoffSession, ReadSession, prepareHandoff, startHandoff } from "../src/tools"
 
 type Context = Plugin.Context
 
@@ -15,10 +15,11 @@ function createContext(partial: Record<string, unknown>): Context {
 const TOOL_CONTEXT = { sessionID: "sess_source", agent: "plan" } as never
 const SOURCE_MODEL = { id: "model", providerID: "provider" }
 
-function createHandoffContext(directory: string) {
+function createHandoffContext(directory: string, options: Record<string, unknown> = {}) {
   const calls: Array<{ name: string; input: unknown }> = []
   const ctx = createContext({
     location: { directory },
+    options,
     session: {
       async get(input: unknown) {
         calls.push({ name: "get", input })
@@ -37,26 +38,32 @@ function createHandoffContext(directory: string) {
 }
 
 describe("HandoffSession", () => {
-  test("starts the session itself, with every named file, when nobody reviews the draft", async () => {
+  test("attaches only selected files, with a manifest and the source agent and model", async () => {
     const directory = await mkdtemp(join(tmpdir(), "opencode-handoff-tools-"))
 
     try {
-      await mkdir(join(directory, "src"))
       await writeFile(join(directory, "note.txt"), "handoff context")
-      await writeFile(join(directory, "src", "inline.ts"), "export {}")
+      await writeFile(join(directory, "reference.txt"), "read this later")
       await writeFile(join(directory, "image.bin"), new Uint8Array([0, 1, 2]))
 
       const { ctx, calls } = createHandoffContext(directory)
       const text = [
         "Continuing work from session sess_source. When you lack specific information you can use read_session to get it.",
-        "@note.txt @missing.md @image.bin",
-        "Continue in @src/inline.ts using @note.txt",
+        "Continue in @reference.txt",
+        "## Files\n\nAttached files are preloaded. Read list-only files with tools if needed.\n\n" +
+          "- `note.txt` (attached): immediate work\n" +
+          "- `reference.txt` (list only): reference\n" +
+          "- `image.bin` (list only: Binary file): image",
       ].join("\n\n")
 
       const result = await HandoffSession(ctx, (draft) => startHandoff(ctx, draft)).execute(
         {
-          prompt: "Continue in @src/inline.ts using @note.txt",
-          files: ["note.txt", "@missing.md", "image.bin"],
+          prompt: "Continue in @reference.txt",
+          files: [
+            { path: "note.txt", description: "immediate work", mode: "attach" },
+            { path: "reference.txt", description: "reference", mode: "list" },
+            { path: "image.bin", description: "image", mode: "attach" },
+          ],
         },
         TOOL_CONTEXT
       )
@@ -71,12 +78,11 @@ describe("HandoffSession", () => {
             text,
             files: [
               { uri: pathToFileURL(join(directory, "note.txt")).href, name: "note.txt" },
-              { uri: pathToFileURL(join(directory, "src", "inline.ts")).href, name: join("src", "inline.ts") },
             ],
           },
         },
       ])
-      expect(result.content).toBe("Started handoff session sess_new with 2 attached file(s).")
+      expect(result.content).toBe("Started handoff session sess_new with 1 attached and 2 list-only file(s).")
     } finally {
       await rm(directory, { recursive: true, force: true })
     }
@@ -88,8 +94,8 @@ describe("HandoffSession", () => {
 
     const result = await HandoffSession(ctx, async (draft) => {
       drafts.push(draft)
-      return { sessionID: "sess_reviewed", files: 2 }
-    }).execute({ prompt: "Continue", files: ["src/a.ts"] }, TOOL_CONTEXT)
+      return { sessionID: "sess_reviewed", files: 1, listed: 2 }
+    }).execute({ prompt: "Continue", files: [{ path: "src/a.ts", description: "alpha", mode: "attach" }] }, TOOL_CONTEXT)
     const cancelled = await HandoffSession(ctx, async () => ({ cancelled: true })).execute(
       { prompt: "Continue" },
       TOOL_CONTEXT
@@ -99,12 +105,41 @@ describe("HandoffSession", () => {
       {
         sourceSessionID: "sess_source",
         agent: "plan",
-        text: "Continuing work from session sess_source. When you lack specific information you can use read_session to get it.\n\n@src/a.ts\n\nContinue",
+        text: "Continue",
+        files: [{ path: "src/a.ts", description: "alpha", mode: "attach" }],
       },
     ])
     expect(calls).toEqual([])
-    expect(result.content).toBe("Started handoff session sess_reviewed with 2 attached file(s).")
+    expect(result.content).toBe("Started handoff session sess_reviewed with 1 attached and 2 list-only file(s).")
     expect(cancelled.content).toBe("The user cancelled the handoff.")
+  })
+
+  test("previews current content, keeps list-only content out of estimates, and enforces the opt-out", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "opencode-handoff-estimate-"))
+    try {
+      await writeFile(join(directory, "a.txt"), "abcde")
+      await writeFile(join(directory, "b.txt"), "x".repeat(10000))
+      const options = { attachFiles: true }
+      const { ctx, calls } = createHandoffContext(directory, options)
+      const draft = { sourceSessionID: "sess_source", agent: "plan", text: "Continue", files: [
+        { path: "a.txt", description: "alpha", mode: "attach" as const },
+        { path: "b.txt", description: "beta", mode: "list" as const },
+      ] }
+      const initial = await prepareHandoff(ctx, draft)
+      expect(initial.preview).toMatchObject({ attachmentTokens: 2, totalTokens: initial.preview.promptTokens + 2 })
+      await writeFile(join(directory, "a.txt"), "a".repeat(21))
+      expect((await prepareHandoff(ctx, draft)).preview.attachmentTokens).toBe(6)
+      expect(await startHandoff(ctx, draft)).toEqual({ sessionID: "sess_new", files: 1, listed: 1 })
+      options.attachFiles = false
+      expect((await prepareHandoff(ctx, draft)).preview.attachmentTokens).toBe(0)
+      expect(await startHandoff(ctx, draft)).toEqual({ sessionID: "sess_new", files: 0, listed: 2 })
+      expect(calls.at(-1)).toMatchObject({ name: "prompt", input: { files: [] } })
+      await rm(join(directory, "a.txt"))
+      options.attachFiles = true
+      expect((await prepareHandoff(ctx, draft)).preview).toMatchObject({ attachmentTokens: null, totalTokens: null })
+    } finally {
+      await rm(directory, { recursive: true, force: true })
+    }
   })
 })
 

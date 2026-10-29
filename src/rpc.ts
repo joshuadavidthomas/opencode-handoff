@@ -1,5 +1,44 @@
 import { Rpc } from "@opencode/plugin/rpc"
 
+export const HandoffFileSchema = {
+  type: "object",
+  properties: {
+    path: { type: "string", minLength: 1 },
+    description: { type: "string" },
+    mode: { type: "string", enum: ["attach", "list"] },
+  },
+  required: ["path", "description", "mode"],
+  additionalProperties: false,
+} as const
+
+export interface HandoffFile {
+  readonly path: string
+  readonly description: string
+  readonly mode: (typeof HandoffFileSchema.properties.mode.enum)[number]
+}
+
+export interface FilePreview extends HandoffFile {
+  readonly attachment: { tokens: number } | { reason: string } | null
+}
+
+export interface HandoffPreview {
+  readonly files: FilePreview[]
+  readonly promptTokens: number
+  readonly attachmentTokens: number | null
+  readonly totalTokens: number | null
+}
+
+const DraftEdit = {
+  type: "object",
+  properties: {
+    draftID: { type: "string" },
+    text: { type: "string" },
+    files: { type: "array", items: HandoffFileSchema },
+  },
+  required: ["draftID", "text", "files"],
+  additionalProperties: false,
+} as const
+
 const DraftID = {
   type: "object",
   properties: { draftID: { type: "string" } },
@@ -29,16 +68,42 @@ export const Handoff = Rpc.define({
       },
     },
     start: {
-      input: {
-        type: "object",
-        properties: { draftID: { type: "string" }, text: { type: "string" } },
-        required: ["draftID", "text"],
-        additionalProperties: false,
-      },
+      input: DraftEdit,
       output: {
         type: "object",
         properties: { sessionID: { type: "string" } },
         required: ["sessionID"],
+        additionalProperties: false,
+      },
+      errors: { not_found: DraftID },
+    },
+    preview: {
+      input: DraftEdit,
+      output: {
+        type: "object",
+        properties: {
+          files: {
+            type: "array",
+            items: {
+              ...HandoffFileSchema,
+              properties: {
+                ...HandoffFileSchema.properties,
+                attachment: {
+                  anyOf: [
+                    { type: "null" },
+                    { type: "object", properties: { tokens: { type: "number" } }, required: ["tokens"], additionalProperties: false },
+                    { type: "object", properties: { reason: { type: "string" } }, required: ["reason"], additionalProperties: false },
+                  ],
+                },
+              },
+              required: [...HandoffFileSchema.required, "attachment"],
+            },
+          },
+          promptTokens: { type: "number" },
+          attachmentTokens: { type: ["number", "null"] },
+          totalTokens: { type: ["number", "null"] },
+        },
+        required: ["files", "promptTokens", "attachmentTokens", "totalTokens"],
         additionalProperties: false,
       },
       errors: { not_found: DraftID },
@@ -53,8 +118,10 @@ export const Handoff = Rpc.define({
           draftID: { type: "string" },
           sourceSessionID: { type: "string" },
           text: { type: "string" },
+          files: { type: "array", items: HandoffFileSchema },
+          attachFiles: { type: "boolean" },
         },
-        required: ["draftID", "sourceSessionID", "text"],
+        required: ["draftID", "sourceSessionID", "text", "files", "attachFiles"],
         additionalProperties: false,
       },
     },
